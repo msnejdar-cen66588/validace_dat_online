@@ -39,6 +39,34 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
 
     const semaphoreIcon = semaphoreColor === 'green' ? '✅' : semaphoreColor === 'orange' ? '⚠️' : '🔴';
 
+    const photoIds = Object.keys(agents['Strazce']?.result?.details?.classifications || {});
+
+    const renderWithLinks = (text: string) => {
+        if (!text || photoIds.length === 0) return text;
+        // Escape photoIds for regex to be safe
+        const escapedIds = photoIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const regex = new RegExp(`(${escapedIds.join('|')})`, 'g');
+        const parts = text.split(regex);
+        return parts.map((part, i) => {
+            if (photoIds.includes(part)) {
+                return (
+                    <a
+                        key={i}
+                        href={`${API_BASE}/uploads/${result.session_id}/${part}.jpg`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#3b82f6', textDecoration: 'underline', fontWeight: 500 }}
+                        title="Zobrazit detail fotky"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {part}
+                    </a>
+                );
+            }
+            return part;
+        });
+    };
+
     const getStatusBadge = (status: string) => {
         switch (status) {
             case 'success': return { text: 'Bez nálezu', class: 'badgeSuccess' };
@@ -547,14 +575,14 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                         {agent.result.warnings?.length > 0 && (
                                             <div className={styles.detailWarnings} style={{ marginBottom: 12 }}>
                                                 {agent.result.warnings.map((w: string, i: number) => (
-                                                    <div key={i} className={styles.warnLine}>⚠️ {w}</div>
+                                                    <div key={i} className={styles.warnLine}>⚠️ {renderWithLinks(w)}</div>
                                                 ))}
                                             </div>
                                         )}
                                         {agent.result.errors?.length > 0 && (
                                             <div className={styles.detailErrors} style={{ marginBottom: 12 }}>
                                                 {agent.result.errors.map((e: string, i: number) => (
-                                                    <div key={i} className={styles.errLine}>❌ {e}</div>
+                                                    <div key={i} className={styles.errLine}>❌ {renderWithLinks(e)}</div>
                                                 ))}
                                             </div>
                                         )}
