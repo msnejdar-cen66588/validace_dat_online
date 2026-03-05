@@ -23,6 +23,45 @@ const AGENT_META: Record<string, { icon: string; label: string; color: string }>
 
 export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+    const [valuation, setValuation] = useState<any>(null);
+    const [isValuing, setIsValuing] = useState(false);
+    const [valError, setValError] = useState('');
+    const [customCoeffs, setCustomCoeffs] = useState<Record<number, string>>({});
+
+    const handleValuation = async () => {
+        setIsValuing(true);
+        setValError('');
+        try {
+            const res = await fetch(`${API_BASE}/api/pipeline/valuation/${result.session_id}`, { method: 'POST' });
+            if (!res.ok) throw new Error('Nepodařilo se vytvořit odhad');
+            const data = await res.json();
+            setValuation(data);
+        } catch (err: any) {
+            setValError(err.message);
+        } finally {
+            setIsValuing(false);
+        }
+    };
+
+    const handleCoeffChange = (id: number, val: string) => {
+        setCustomCoeffs(prev => ({ ...prev, [id]: val }));
+    };
+
+    // Vypocet upravene NHZP na zaklade manualnich koeficientu
+    let adjustedNhzp = 0;
+    if (valuation?.details?.odhad_czk) {
+        adjustedNhzp = valuation.details.odhad_czk;
+        const samples = valuation.details.vzorky || [];
+        if (samples.length > 0) {
+            let totalVal = 0;
+            samples.forEach((s: any) => {
+                const coeffRaw = customCoeffs[s.id] !== undefined ? customCoeffs[s.id] : String(s.koeficient_podobnosti);
+                const coeff = parseFloat(coeffRaw.replace(',', '.')) || 1.0;
+                totalVal += (s.cena_czk / coeff);
+            });
+            adjustedNhzp = Math.round(totalVal / samples.length);
+        }
+    }
 
     const semaphore = result.semaphore || 'UNKNOWN';
     const semaphoreColor = result.semaphore_color || 'gray';
@@ -100,6 +139,76 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                         </div>
                     )}
                 </div>
+
+                {/* ── Valuation Button ── */}
+                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                    <button
+                        className="btn btn-primary"
+                        style={{ background: '#3b82f6', fontSize: '16px', padding: '12px 24px', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center', gap: '8px' }}
+                        onClick={handleValuation}
+                        disabled={isValuing}
+                    >
+                        <span>💰</span>
+                        {isValuing ? 'Vypracovávám odhad online...' : 'Vypracovat tržní odhad (porovnávací metoda)'}
+                    </button>
+                    {valError && <div style={{ color: '#ef4444', fontSize: '13px' }}>{valError}</div>}
+                </div>
+
+                {/* ── Valuation Results ── */}
+                {valuation && valuation.details && (
+                    <div className={styles.comparisonCard} style={{ marginTop: '24px', border: '2px solid #3b82f6', background: '#eff6ff' }}>
+                        <div className={styles.comparisonHeader}>
+                            <h3 className={styles.comparisonTitle} style={{ color: '#1e3a8a' }}>
+                                📊 Tržní odhad (NHZP)
+                            </h3>
+                        </div>
+                        <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                            <div style={{ fontSize: '14px', color: '#475569', marginBottom: '4px' }}>Odhadovaná obvyklá cena</div>
+                            <div style={{ fontSize: '36px', fontWeight: 800, color: '#1e40af' }}>
+                                {adjustedNhzp.toLocaleString('cs-CZ')} Kč
+                            </div>
+                            <div style={{ fontSize: '14px', color: '#64748b', marginTop: '8px', maxWidth: '600px', margin: '8px auto 0' }}>
+                                {valuation.details.duvod}
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: '16px' }}>
+                            <h4 style={{ fontSize: '15px', fontWeight: 600, color: '#334155', marginBottom: '12px' }}>Srovnávací vzorky (upravte koeficienty pro automatický přepočet)</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                {valuation.details.vzorky?.map((s: any) => {
+                                    const currentCoeff = customCoeffs[s.id] !== undefined ? customCoeffs[s.id] : String(s.koeficient_podobnosti);
+                                    return (
+                                        <div key={s.id} style={{ background: '#fff', padding: '16px', borderRadius: '12px', border: '1px solid #cbd5e1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                <div>
+                                                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px' }}>{s.adresa}</div>
+                                                    <div style={{ fontSize: '13px', color: '#64748b' }}>Dům: {s.velikost_domu_m2} m² | Pozemek: {s.velikost_pozemku_m2} m²</div>
+                                                    <div style={{ fontSize: '13px', color: '#64748b' }}>Stav: {s.stav}</div>
+                                                </div>
+                                                <div style={{ textAlign: 'right' }}>
+                                                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '16px' }}>{s.cena_czk.toLocaleString('cs-CZ')} Kč</div>
+                                                </div>
+                                            </div>
+                                            <div style={{ fontSize: '13px', color: '#475569', background: '#f8fafc', padding: '8px', borderRadius: '6px' }}>
+                                                {s.oduvodneni_koeficientu}
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+                                                <label style={{ fontSize: '14px', fontWeight: 600, color: '#334155' }}>Koeficient podobnosti:</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={currentCoeff}
+                                                    onChange={(e) => handleCoeffChange(s.id, e.target.value)}
+                                                    style={{ width: '80px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', fontWeight: 600, textAlign: 'center' }}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* ── Meta info ── */}
                 <div className={styles.metaStrip}>

@@ -276,6 +276,30 @@ async def get_pipeline_state(session_id: str):
     return orchestrator.get_state()
 
 
+@app.post("/api/pipeline/valuation/{session_id}")
+async def generate_valuation(session_id: str):
+    """Run just the Valuation (Odhadce) agent to get comparative market estimation."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found.")
+        
+    session = sessions[session_id]
+    context = {
+        "session_id": session_id,
+        "images": session["images"],
+        "property_address": session.get("property_address", ""),
+        "property_data": session.get("property_data"),
+    }
+    
+    agent = OdhadceAgent()
+    result = await agent.run(context)
+    
+    # Store result optionally on session if needed
+    if "valuation" not in session:
+        session["valuation"] = result.to_dict()
+        
+    return result.to_dict()
+
+
 @app.post("/api/agent/prompt/{session_id}/{agent_name}")
 async def update_agent_prompt(session_id: str, agent_name: str, prompt: dict):
     """Update an agent's system prompt."""
