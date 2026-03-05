@@ -4,6 +4,8 @@ import uuid
 import json
 from typing import Optional
 
+import fitz
+
 from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -135,11 +137,33 @@ async def upload_files(
 
     # === Process image files ===
     valid_files = []
+    has_pdf_photos = False
     for f in files:
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
             valid_files.append((f.filename or "unknown", file_bytes))
+        elif ext == ".pdf":
+            file_bytes = await f.read()
+            try:
+                # Otevření PDF přes PyMuPDF z bytestreamu
+                doc = fitz.open(stream=file_bytes, filetype="pdf")
+                for page_num in range(len(doc)):
+                    page = doc.load_page(page_num)
+                    image_list = page.get_images(full=True)
+                    for img_index, img_info in enumerate(image_list):
+                        xref = img_info[0]
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
+                        image_ext = base_image["ext"]
+                        # Pro jistotu povolíme i "jpeg" apod. (ext bez tečky)
+                        normalized_ext = f".{image_ext.lower()}".replace(".jpeg", ".jpg")
+                        if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png"):
+                            img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
+                            valid_files.append((img_filename, image_bytes))
+                            has_pdf_photos = True
+            except Exception:
+                pass  # Při selhání extrakce přeskočit
         else:
             pass  # Skip unsupported formats silently
 
@@ -174,6 +198,7 @@ async def upload_files(
         "processed_paths": [img.processed_path for img in processed],
         "lv_pdf_path": lv_pdf_path,
         "selected_parcels": selected_parcels,
+        "has_pdf_photos": has_pdf_photos,
     }
 
     return {
@@ -211,6 +236,7 @@ async def start_pipeline(
         "property_data": session.get("property_data"),
         "lv_pdf_path": session.get("lv_pdf_path"),
         "selected_parcels": session.get("selected_parcels"),
+        "has_pdf_photos": session.get("has_pdf_photos", False),
         "custom_prompts": custom_prompts or {},
     }
 

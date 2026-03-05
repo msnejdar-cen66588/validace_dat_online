@@ -101,6 +101,7 @@ class GeoValidatorAgent(BaseAgent):
         property_lat = context.get("property_lat")
         property_lon = context.get("property_lon")
         session_id = context.get("session_id", "unknown")
+        has_pdf_photos = context.get("has_pdf_photos", False)
 
         # Guardian classifications (used to find the street-facing photo)
         guardian_result = context.get("agent_results", {}).get("Guardian")
@@ -300,7 +301,10 @@ class GeoValidatorAgent(BaseAgent):
 
         # ── Step 6: Determine final status ─────────────────────────────
         if len(photos_without_gps) > len(photos_with_gps):
-            warnings.append(f"Většina fotek ({len(photos_without_gps)}/{len(images)}) nemá GPS metadata.")
+            if has_pdf_photos and property_address:
+                self.log("Fotografie zřejmě pocházejí z PDF (bez GPS). Pro ověření se spoléhám na adresu z formuláře.", "info")
+            else:
+                warnings.append(f"Většina fotek ({len(photos_without_gps)}/{len(images)}) nemá GPS metadata.")
 
         if errors:
             status = AgentStatus.FAIL
