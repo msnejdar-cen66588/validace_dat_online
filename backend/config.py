@@ -14,6 +14,11 @@ MAPY_CZ_API_KEY = os.getenv("MAPY_CZ_API_KEY", "")
 # ČÚZK Katastr nemovitostí REST API
 CUZK_API_KEY = os.getenv("CUZK_API_KEY", "")
 
+# Google Cloud Vision
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+BLOCKED_DOMAINS = ["sreality.cz", "bezrealitky.cz", "idnes.cz"]
+
 # Image Processing
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB

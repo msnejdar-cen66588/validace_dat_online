@@ -6,14 +6,20 @@ Detects AI edits, retouching, and metadata inconsistencies:
 - Analyzes local artifacts, metadata mismatches, AI generation
 """
 import json
+import asyncio
 from google import genai
 from google.genai import types
+from google.cloud import vision
+
+from google.oauth2 import service_account
 
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     MANIPULATION_SCORE_THRESHOLD, CONFIDENCE_THRESHOLD,
+    GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_CREDENTIALS_JSON, BLOCKED_DOMAINS
 )
+
 
 FORENSIC_SYSTEM_PROMPT = """Jsi forenzní expert na analýzu fotografií nemovitostí. Tvým úkolem je detekovat jakékoliv manipulace, AI úpravy, retuše nebo nesrovnalosti.
 
@@ -23,6 +29,7 @@ ANALYZUJ KAŽDOU FOTOGRAFII NA:
 3. **Lokální Artefakty**: Skoky v kompresi, nekonzistentní šum, blur/sharpen anomálie
 4. **Metadata Nesoulad**: Nesoulad mezi vizuálním obsahem a metadaty (osvětlení vs. čas pořízení, GPS vs. zobrazený prostor)
 5. **Manipulace Perspektivy**: Zkreslení perspektivy, nereálné úhly, postprodukční korekce
+6. **Původ Fotografie**: Jsou fotografie stažené z internetu (např. vodoznaky, specifické kompresní artefakty pro web, loga portálů, zejména sreality.cz)?
 
 PRO KAŽDOU FOTOGRAFII VRAŤ:
 - manipulation_score: 0.0-1.0 (0 = žádná manipulace, 1 = jasná manipulace)
@@ -37,6 +44,7 @@ VRAŤ JSON:
       "manipulation_score": 0.15,
       "confidence": 0.85,
       "is_ai_generated": false,
+      "is_downloaded_from_internet": false,
       "findings": ["Mírná úprava jasu", "Žádné známky klonování"],
       "risk_level": "low"
     }
@@ -66,6 +74,63 @@ class ForensicAgent(BaseAgent):
             system_prompt=FORENSIC_SYSTEM_PROMPT,
         )
         self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.vision_client = None
+        
+        try:
+            if GOOGLE_CREDENTIALS_JSON:
+                creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+                credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                self.vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+                self.log("Google Cloud Vision klient inicializován z JSON řetězce.")
+            elif GOOGLE_APPLICATION_CREDENTIALS:
+                self.vision_client = vision.ImageAnnotatorClient()
+                self.log("Google Cloud Vision klient inicializován ze souboru.")
+        except Exception as e:
+            self.log(f"Nepodařilo se inicializovat Google Cloud Vision: {e}", "warn")
+
+    async def _check_web_detection(self, image_path: str, photo_id: str) -> dict:
+        """Checks if the image exists on blocked domains using Google Cloud Vision."""
+        if not self.vision_client:
+            return {"photo_id": photo_id, "found_on_blocked_domain": False, "details": []}
+            
+        try:
+            with open(image_path, "rb") as image_file:
+                content = image_file.read()
+                
+            image = vision.Image(content=content)
+            
+            # Run vision API in a separate thread since it's blocking
+            response = await asyncio.to_thread(
+                self.vision_client.web_detection,
+                image=image
+            )
+            
+            web_detection = response.web_detection
+            blocked_matches = []
+            
+            if web_detection.pages_with_matching_images:
+                for page in web_detection.pages_with_matching_images:
+                    url = page.url.lower()
+                    for blocked_domain in BLOCKED_DOMAINS:
+                        if blocked_domain in url:
+                            blocked_matches.append(url)
+                            
+            if web_detection.full_matching_images:
+                for image_match in web_detection.full_matching_images:
+                    url = image_match.url.lower()
+                    for blocked_domain in BLOCKED_DOMAINS:
+                        if blocked_domain in url:
+                            blocked_matches.append(url)
+            
+            return {
+                "photo_id": photo_id, 
+                "found_on_blocked_domain": len(blocked_matches) > 0, 
+                "details": blocked_matches[:3] # keep only first 3 matches to avoid huge logs
+            }
+                
+        except Exception as e:
+            self.log(f"Web detection selhala pro foto {photo_id}: {e}", "error")
+            return {"photo_id": photo_id, "found_on_blocked_domain": False, "details": []}
 
     async def run(self, context: dict) -> AgentResult:
         images = context.get("images", [])
@@ -81,8 +146,17 @@ class ForensicAgent(BaseAgent):
 
         try:
             self.log("Sending images for forensic analysis...", "thinking")
-
-            # Include metadata context
+            
+            # 1. Run Web Detection in parallel for all images if enabled
+            web_detection_results = {}
+            if self.vision_client:
+                self.log("Spouštím Web Detection pro hledání fotografií na internetu...")
+                tasks = [self._check_web_detection(img["processed_path"], img["id"]) for img in images]
+                results = await asyncio.gather(*tasks)
+                for res in results:
+                    web_detection_results[res["photo_id"]] = res
+            
+            # 2. Prepare Gemini prompt
             metadata_info = []
             for img in images:
                 meta = img.get("metadata", {})
@@ -120,29 +194,48 @@ class ForensicAgent(BaseAgent):
             # Parse results
             overall = ai_result.get("overall", {})
             photos = ai_result.get("photos", [])
-            max_score = overall.get("max_manipulation_score", 0)
-            flagged = overall.get("flagged_count", 0)
-
+            
             warnings = []
             errors = []
+            max_score = overall.get("max_manipulation_score", 0)
 
-            # Check for critical manipulations
+            # Check for critical manipulations and Web Detection matches
             for photo in photos:
+                photo_id = photo.get("photo_id")
                 score = photo.get("manipulation_score", 0)
                 confidence = photo.get("confidence", 0)
+                
+                # Verify web detection result
+                web_res = web_detection_results.get(photo_id, {})
+                if web_res.get("found_on_blocked_domain"):
+                    # Force critical failure if found on blocked domains
+                    photo["manipulation_score"] = 1.0
+                    photo["confidence"] = 1.0
+                    photo["is_downloaded_from_internet"] = True
+                    photo["findings"].append(f"FOTOGRAFIE NALEZENA NA ZAKÁZANÝCH DOMÉNÁCH: {', '.join(web_res['details'])}")
+                    photo["risk_level"] = "critical"
+                    errors.append(f"Photo {photo_id}: Extrémní riziko – fotografie byla stažena z internetu (nalezena shoda na portálech).")
+                    max_score = 1.0
+                    overall["flagged_count"] = overall.get("flagged_count", 0) + 1
+                    continue
+                
                 if score >= MANIPULATION_SCORE_THRESHOLD and confidence >= CONFIDENCE_THRESHOLD:
                     errors.append(
-                        f"Photo {photo['photo_id']}: manipulation_score={score:.2f}, confidence={confidence:.2f} – "
+                        f"Photo {photo_id}: manipulation_score={score:.2f}, confidence={confidence:.2f} – "
                         f"překročen práh ({MANIPULATION_SCORE_THRESHOLD}/{CONFIDENCE_THRESHOLD})"
                     )
                 elif score >= 0.4:
                     warnings.append(
-                        f"Photo {photo['photo_id']}: podezření na manipulaci (score={score:.2f})"
+                        f"Photo {photo_id}: podezření na manipulaci (score={score:.2f})"
                     )
+
+            overall["max_manipulation_score"] = max_score
+            if errors:
+                overall["summary"] = "Nalezena kritická rizika u nahraných fotografií (manipulace nebo stažení z portálů)."
 
             status = AgentStatus.FAIL if errors else (AgentStatus.WARN if warnings else AgentStatus.SUCCESS)
 
-            self.log(f"Forensic result: {status.value} – flagged: {flagged}, max_score: {max_score:.2f}")
+            self.log(f"Forensic result: {status.value} – flagged: {overall.get('flagged_count', 0)}, max_score: {max_score:.2f}")
 
             return AgentResult(
                 status=status,
@@ -163,3 +256,4 @@ class ForensicAgent(BaseAgent):
                 summary=f"Chyba forenzní analýzy: {str(e)}",
                 warnings=[f"Analýza selhala: {str(e)}"],
             )
+
