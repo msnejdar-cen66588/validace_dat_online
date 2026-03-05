@@ -15,6 +15,7 @@ from preprocessor import ImagePreprocessor
 from orchestrator import PipelineOrchestrator
 from pdf_parser import parse_pdf
 from lv_parser import parse_lv
+from agents.odhadce import OdhadceAgent
 
 app = FastAPI(
     title="AI Validation Pipeline – Rodinné Domy",
