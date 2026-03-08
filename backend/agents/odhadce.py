@@ -21,6 +21,7 @@ Vytvoříš ze svých obsáhlých znalostí realitního trhu v ČR 3 vysoce real
 
 METODIKA a KROK 1:
 1. Vygeneruj 3 konkrétní vzorky (nabídky rodinných domů) pro srovnání.
+   - U každého vzorku přidej pole "obrazek_url", které bude mít vždy tuto přesnou hodnotu: "https://loremflickr.com/600/400/house,exterior?lock={id}", kde místo {id} vlož id daného vzorku.
    - Jednotková cena (Kč/m2) oceňované nemovitosti nesmí být nikdy vyšší než cena inzerovaná u totožného objektu.
 
 KROK 2: APLIKACE KOREKČNÍCH KOEFICIENTŮ (K1 až K8)
@@ -46,6 +47,7 @@ Vrať POUZE striktně formátovaný JSON podle této struktury, nic jiného:
       "velikost_pozemku_m2": 600,
       "stav": "Po řečné rekonstrukci",
       "cena_czk": 8800000,
+      "obrazek_url": "https://loremflickr.com/600/400/house,exterior?lock=1",
       "koeficienty": {
         "k1": 0.85, "k2": 1.00, "k3": 1.05, "k4": 1.00, "k5": 0.90, "k6": 1.00, "k7": 1.00, "k8": 1.00
       },
@@ -86,10 +88,18 @@ class OdhadceAgent(BaseAgent):
         roof = prop_data.get("typ_strechy") or "Neznámá střecha"
         heating = prop_data.get("typ_vytapeni") or "Neznámé vytápění"
 
+        # Overrides from frontend if user edited the inputs manually
+        overrides = context.get("valuation_overrides") or {}
+        address = overrides.get("adresa") or address
+        floor_area = overrides.get("plocha") or floor_area
+        condition = overrides.get("stav") or condition
+        land_area = overrides.get("pozemek") or prop_data.get("plocha_pozemku") or "Neznámá"
+
         prompt_text = (
             f"Parametry analyzované nemovitosti:\n"
             f"- Adresa: {address}\n"
-            f"- Podlahová plocha: {floor_area}\n"
+            f"- Podlahová/Užitná plocha: {floor_area}\n"
+            f"- Plocha pozemku: {land_area}\n"
             f"- Stav: {condition}\n"
             f"- Střecha: {roof}\n"
             f"- Vytápění: {heating}\n\n"

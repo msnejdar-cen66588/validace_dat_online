@@ -7,7 +7,7 @@ from typing import Optional
 import io
 from pypdf import PdfReader
 
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -243,6 +243,10 @@ async def start_pipeline(
     # Run pipeline (async)
     result = await orchestrator.run_pipeline(context)
 
+    # Attach property data
+    result["property_data"] = session.get("property_data")
+    result["property_address"] = session.get("property_address")
+
     # Store result
     sessions[session_id]["result"] = result
 
@@ -257,11 +261,15 @@ async def get_results(session_id: str):
 
     session = sessions[session_id]
     result = session.get("result")
+    
     if not result:
         # Return current state if still running
         orchestrator = orchestrators.get(session_id)
         if orchestrator:
-            return orchestrator.get_state()
+            state = orchestrator.get_state()
+            state["property_data"] = session.get("property_data")
+            state["property_address"] = session.get("property_address")
+            return state
         raise HTTPException(status_code=404, detail="No results yet.")
 
     return result
@@ -273,21 +281,40 @@ async def get_pipeline_state(session_id: str):
     orchestrator = orchestrators.get(session_id)
     if not orchestrator:
         raise HTTPException(status_code=404, detail="No active pipeline for this session.")
-    return orchestrator.get_state()
+        
+    state = orchestrator.get_state()
+    if session_id in sessions:
+        state["property_data"] = sessions[session_id].get("property_data")
+        state["property_address"] = sessions[session_id].get("property_address")
+    return state
 
 
 @app.post("/api/pipeline/valuation/{session_id}")
-async def generate_valuation(session_id: str):
+async def generate_valuation(session_id: str, payload: dict = Body(None)):
     """Run just the Valuation (Odhadce) agent to get comparative market estimation."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found.")
         
     session = sessions[session_id]
+    
+    # Use provided overrides if any
+    custom_address = payload.get("adresa") if payload else None
+    custom_area = payload.get("plocha") if payload else None
+    custom_land = payload.get("pozemek") if payload else None
+    custom_condition = payload.get("stav") if payload else None
+
+    # We provide this override mapping in context
     context = {
         "session_id": session_id,
         "images": session["images"],
         "property_address": session.get("property_address", ""),
         "property_data": session.get("property_data"),
+        "valuation_overrides": {
+            "adresa": custom_address,
+            "plocha": custom_area,
+            "pozemek": custom_land,
+            "stav": custom_condition
+        }
     }
     
     agent = OdhadceAgent()

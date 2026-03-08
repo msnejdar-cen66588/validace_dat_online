@@ -25,14 +25,32 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
     const [valuation, setValuation] = useState<any>(null);
     const [isValuing, setIsValuing] = useState(false);
+    const [isSetupOpen, setIsSetupOpen] = useState(false);
     const [valError, setValError] = useState('');
     const [customCoeffs, setCustomCoeffs] = useState<Record<number, Record<string, string>>>({});
+    const [setupData, setSetupData] = useState({ adresa: '', plocha: '', pozemek: '', stav: '' });
 
-    const handleValuation = async () => {
+    const openSetup = () => {
+        const pData = result.property_data || {} as any;
+        setSetupData({
+            adresa: pData.adresa || result.property_address || '',
+            plocha: pData.celkova_podlahova_plocha || '',
+            pozemek: pData.plocha_pozemku || '',
+            stav: pData.stav_rodinneho_domu || ''
+        });
+        setIsSetupOpen(true);
+    };
+
+    const confirmSetup = async () => {
+        setIsSetupOpen(false);
         setIsValuing(true);
         setValError('');
         try {
-            const res = await fetch(`${API_BASE}/api/pipeline/valuation/${result.session_id}`, { method: 'POST' });
+            const res = await fetch(`${API_BASE}/api/pipeline/valuation/${result.session_id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(setupData)
+            });
             if (!res.ok) throw new Error('Nepodařilo se vytvořit odhad');
             const data = await res.json();
             setValuation(data);
@@ -149,18 +167,54 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                 </div>
 
                 {/* ── Valuation Button ── */}
-                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                    <button
-                        className="btn btn-primary"
-                        style={{ background: '#3b82f6', fontSize: '16px', padding: '12px 24px', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center', gap: '8px' }}
-                        onClick={handleValuation}
-                        disabled={isValuing}
-                    >
-                        <span>💰</span>
-                        {isValuing ? 'Vypracovávám odhad online...' : 'Vypracovat tržní odhad (porovnávací metoda)'}
-                    </button>
-                    {valError && <div style={{ color: '#ef4444', fontSize: '13px' }}>{valError}</div>}
-                </div>
+                {!isSetupOpen && !valuation && (
+                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                        <button
+                            className="btn btn-primary"
+                            style={{ background: '#3b82f6', fontSize: '16px', padding: '12px 24px', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center', gap: '8px' }}
+                            onClick={openSetup}
+                            disabled={isValuing}
+                        >
+                            <span>💰</span>
+                            {isValuing ? 'Vypracovávám odhad online...' : 'Vypracovat tržní odhad (porovnávací metoda)'}
+                        </button>
+                        {valError && <div style={{ color: '#ef4444', fontSize: '13px' }}>{valError}</div>}
+                    </div>
+                )}
+
+                {/* ── Valuation Setup Form ── */}
+                {isSetupOpen && (
+                    <div className={styles.comparisonCard} style={{ marginTop: '24px', border: '2px solid #3b82f6', background: '#eff6ff', padding: '20px' }}>
+                        <h3 className={styles.comparisonTitle} style={{ color: '#1e3a8a', marginBottom: '16px' }}>⚙️ Nastavení parametrů pro ocenění</h3>
+                        <p style={{ fontSize: '14px', color: '#475569', marginBottom: '16px' }}>Zkontrolujte a případně upravte vstupní údaje před odesláním umělé inteligenci pro srovnávací metodu.</p>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Cílová adresa:</label>
+                                <input type="text" value={setupData.adresa} onChange={(e) => setSetupData(p => ({ ...p, adresa: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Užitná/Podlahová plocha (m²):</label>
+                                    <input type="text" value={setupData.plocha} onChange={(e) => setSetupData(p => ({ ...p, plocha: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Plocha pozemku (m²):</label>
+                                    <input type="text" value={setupData.pozemek} onChange={(e) => setSetupData(p => ({ ...p, pozemek: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Technický stav objektu:</label>
+                                <input type="text" value={setupData.stav} onChange={(e) => setSetupData(p => ({ ...p, stav: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" onClick={() => setIsSetupOpen(false)} style={{ padding: '10px 20px' }}>Zrušit</button>
+                            <button className="btn btn-primary" onClick={confirmSetup} style={{ padding: '10px 20px', background: '#3b82f6' }}>Spočítat NHZP</button>
+                        </div>
+                    </div>
+                )}
 
                 {/* ── Valuation Results ── */}
                 {valuation && valuation.details && (
@@ -187,6 +241,9 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                     const currentCoeff = customCoeffs[s.id] !== undefined ? customCoeffs[s.id] : String(s.koeficient_podobnosti);
                                     return (
                                         <div key={s.id} style={{ background: '#fff', padding: '16px', borderRadius: '12px', border: '1px solid #cbd5e1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {s.obrazek_url && (
+                                                <img src={s.obrazek_url} alt="Srovnávací vzorek" style={{ width: '100%', height: '220px', objectFit: 'cover', borderRadius: '8px', marginBottom: '8px' }} />
+                                            )}
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                                 <div>
                                                     <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px' }}>{s.adresa}</div>

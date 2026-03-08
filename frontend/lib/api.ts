@@ -140,6 +140,8 @@ export interface PipelineResult {
     semaphore_color: string;
     final_category: number | null;
     agents: Record<string, AgentState>;
+    property_data?: PropertyData;
+    property_address?: string;
 }
 
 export async function uploadFiles(
