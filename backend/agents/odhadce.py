@@ -13,36 +13,44 @@ from agents.base import BaseAgent, AgentResult, AgentStatus
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 
-VALUATION_PROMPT = """Jsi expertní odhadce nemovitostí (soudní znalec / profesionální makléř) se specializací na trh s rodinnými domy v České republice.
+VALUATION_PROMPT = """Jsi expertní AI agent pro online oceňování rezidenčních nemovitostí (rodinných domů) porovnávací metodou podle standardů bankovních institucí v ČR.
 
 TVŮJ ÚKOL:
-Na základě dodaných parametrů konkrétního rodinného domu (velikost, stav, adresa/lokalita) vypracuj odhad jeho obvyklé tržní ceny (NHZP) pomocí POROVNÁVACÍ METODY.
-Jelikož nemáš živý přístup k aktuálním nabídkám Srealit, **vytvoříš ze svých obsáhlých znalostí realitního trhu (rok 2024-2026) 3 vysoce realistické a reprezentativní "jako by aktuální" nabídky podobných domů** ve stejné nebo velmi podobné lokalitě.
+Na základě dodaných parametrů konkrétního rodinného domu (velikost, stav, adresa/lokalita) vypracuj odhad jeho obvyklé tržní ceny (NHZP) pomocí POROVNÁVACÍ METODY s využitím 8 koeficientů (K1 až K8).
+Vytvoříš ze svých obsáhlých znalostí realitního trhu v ČR 3 vysoce realistické "jako by aktuální" nabídky podobných domů ve stejné nebo velmi podobné lokalitě.
 
-METODIKA:
-1. Odhadni základní/výchozí tržní cenu za analyzovaný dům (v CZK).
-2. Vygeneruj 3 konkrétní vzorky (nabídky rodinných domů) pro srovnání.
-   - Snaž se, aby vzorky měly podobnou podlahovou plochu a stav.
-   - Musí být v blízkém či srovnatelném okolí (stejné město/okres/kraj s ohledem na atraktivitu).
-   - U každého vzorku urči "koeficient_podobnosti" (float kolem 1.00, kde 1.00 = naprosto stejné, 1.05 = vzorek je o 5% lepší, 0.90 = vzorek je o 10% horší atd.) - koeficienty nesmí být u všech stejné.
-   - Vymysli pro vzorky realistické adresy (ulice, obec), rozlohy a krátké popisy stavu.
+METODIKA a KROK 1:
+1. Vygeneruj 3 konkrétní vzorky (nabídky rodinných domů) pro srovnání.
+   - Jednotková cena (Kč/m2) oceňované nemovitosti nesmí být nikdy vyšší než cena inzerovaná u totožného objektu.
+
+KROK 2: APLIKACE KOREKČNÍCH KOEFICIENTŮ (K1 až K8)
+U každého vzorku stanovíš 8 koeficientů. Pokud jsou vlastnosti totožné s naším domem, K = 1.00. Pokud se srovnávací vzorek jeví LEPŠÍ než náš dům, použij K < 1.00. Pokud se vzorek jeví HORŠÍ, použij K > 1.00.
+- K1 (Redukce pramene ceny): 0.70 až 1.00 (typicky 0.85 pro inzerci).
+- K2 (Velikost objektu): Poměr velikosti (zde dej 1.00, velikost zohledníme přes metry čtvereční na frontendu).
+- K3 (Poloha): 0.90 až 1.10. Zohledňuje okolí a dostupnost.
+- K4 (Provedení a vybavení): 0.80 až 1.20. Materiály a konstrukce.
+- K5 (Celkový stav): 0.22 až 1.50. Opotřebení, stáří, investice.
+- K6 (Vliv pozemku): Cizí pozemek = 0.85, vlastní do 1.5x zastavěné plochy = 1.00, větší pozemky prémie dle poměru (1.05 až 1.20).
+- K7 (Úvaha zpracovatele): 0.80 až 1.20. Přístup, břemena, rizika (většinou 1.00).
+- K8 (Energetická náročnost): 0.80 až 1.20. Horší energetická třída vzorku = K > 1.00.
 
 Vrať POUZE striktně formátovaný JSON podle této struktury, nic jiného:
 {
   "zakladni_odhad_czk": 8500000,
-  "duvod_odhadu": "Krátké shrnutí, proč jsi zvolil tuto cenovou hladinu (lokalita, stav).",
+  "duvod_odhadu": "Krátké shrnutí pro tuto lokaci.",
   "vzorky": [
     {
       "id": 1,
-      "adresa": "Krátká 12, Boskovice",
+      "adresa": "Ulička 12, Město",
       "velikost_domu_m2": 150,
       "velikost_pozemku_m2": 600,
       "stav": "Po řečné rekonstrukci",
       "cena_czk": 8800000,
-      "koeficient_podobnosti": 1.05,
-      "oduvodneni_koeficientu": "Vzorek je mírně větší a má lepší izolaci, proto je cenově výš."
-    },
-    ...
+      "koeficienty": {
+        "k1": 0.85, "k2": 1.00, "k3": 1.05, "k4": 1.00, "k5": 0.90, "k6": 1.00, "k7": 1.00, "k8": 1.00
+      },
+      "oduvodneni_koeficientu": "Vzorek 1 má lepší izolaci (k5) a atraktivní polohu (k3)."
+    }
   ]
 }
 """

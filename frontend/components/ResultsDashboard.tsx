@@ -26,7 +26,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     const [valuation, setValuation] = useState<any>(null);
     const [isValuing, setIsValuing] = useState(false);
     const [valError, setValError] = useState('');
-    const [customCoeffs, setCustomCoeffs] = useState<Record<number, string>>({});
+    const [customCoeffs, setCustomCoeffs] = useState<Record<number, Record<string, string>>>({});
 
     const handleValuation = async () => {
         setIsValuing(true);
@@ -43,11 +43,14 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
         }
     };
 
-    const handleCoeffChange = (id: number, val: string) => {
-        setCustomCoeffs(prev => ({ ...prev, [id]: val }));
+    const handleCoeffChange = (id: number, key: string, val: string) => {
+        setCustomCoeffs(prev => {
+            const currentObj = prev[id] || {};
+            return { ...prev, [id]: { ...currentObj, [key]: val } };
+        });
     };
 
-    // Vypocet upravene NHZP na zaklade manualnich koeficientu
+    // Vypocet upravene NHZP na zaklade manualnich koeficientu K1-K8
     let adjustedNhzp = 0;
     if (valuation?.details?.odhad_czk) {
         adjustedNhzp = valuation.details.odhad_czk;
@@ -55,9 +58,14 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
         if (samples.length > 0) {
             let totalVal = 0;
             samples.forEach((s: any) => {
-                const coeffRaw = customCoeffs[s.id] !== undefined ? customCoeffs[s.id] : String(s.koeficient_podobnosti);
-                const coeff = parseFloat(coeffRaw.replace(',', '.')) || 1.0;
-                totalVal += (s.cena_czk / coeff);
+                const kData = customCoeffs[s.id] || s.koeficienty || {};
+                let isValue = 1.0;
+                ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
+                    const strVal = String(kData[k] ?? '1.0');
+                    const num = parseFloat(strVal.replace(',', '.')) || 1.0;
+                    isValue *= num;
+                });
+                totalVal += (s.cena_czk * isValue);
             });
             adjustedNhzp = Math.round(totalVal / samples.length);
         }
@@ -192,15 +200,22 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                             <div style={{ fontSize: '13px', color: '#475569', background: '#f8fafc', padding: '8px', borderRadius: '6px' }}>
                                                 {s.oduvodneni_koeficientu}
                                             </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
-                                                <label style={{ fontSize: '14px', fontWeight: 600, color: '#334155' }}>Koeficient podobnosti:</label>
-                                                <input
-                                                    type="number"
-                                                    step="0.01"
-                                                    value={currentCoeff}
-                                                    onChange={(e) => handleCoeffChange(s.id, e.target.value)}
-                                                    style={{ width: '80px', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '14px', fontWeight: 600, textAlign: 'center' }}
-                                                />
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: '4px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+                                                {['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].map(k => {
+                                                    const kData = customCoeffs[s.id] || s.koeficienty || {};
+                                                    const currentCoeff = kData[k] !== undefined ? String(kData[k]) : '1';
+                                                    return (
+                                                        <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                            <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', textAlign: 'center' }}>{k}</label>
+                                                            <input
+                                                                type="text"
+                                                                value={currentCoeff}
+                                                                onChange={(e) => handleCoeffChange(s.id, k, e.target.value)}
+                                                                style={{ width: '100%', padding: '4px 4px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'center' }}
+                                                            />
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     );
