@@ -126,7 +126,7 @@ class StrategAgent(BaseAgent):
         # Generate human-readable report via Gemini
         human_report = await self._generate_report(
             agent_summaries, semaphore, final_category,
-            effective_age, ai_score, total_warns, has_fail,
+            effective_age, total_warns, has_fail,
         )
 
         # Build status
