@@ -139,6 +139,17 @@ async def upload_files(
         except json.JSONDecodeError:
             pass
 
+    # Calculate total area of selected parcels if we have LV data
+    if selected_parcels and lv_data_preview and "parcels" in lv_data_preview:
+        if property_data is None:
+            property_data = {}
+        total_area = sum(
+            p.get("area_m2", 0) for p in lv_data_preview["parcels"] 
+            if p.get("parcel_number") in selected_parcels
+        )
+        if total_area > 0:
+            property_data["plocha_pozemku"] = str(total_area)
+
     # === Process image files ===
     valid_files = []
     has_pdf_photos = False

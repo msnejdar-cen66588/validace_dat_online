@@ -182,6 +182,8 @@ class PipelineOrchestrator:
             "semaphore_color": strategist_result.details.get("semaphore_color", "gray"),
             "final_category": strategist_result.category,
             "agents": self.results,
+            "property_data": context.get("property_data"),
+            "property_address": context.get("property_address"),
         }
 
         await self.broadcast({
