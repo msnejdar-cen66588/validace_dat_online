@@ -15,9 +15,9 @@ export interface WSMessage {
     agents?: string[];
 }
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_BASE_DELAY = 2000;
-const POLL_INTERVAL = 5000;
+const MAX_RECONNECT_ATTEMPTS = 8;
+const RECONNECT_BASE_DELAY = 3000;
+const POLL_INTERVAL = 15000; // 15 seconds — gentle on Render
 
 export function useWebSocket(sessionId: string | null) {
     const wsRef = useRef<WebSocket | null>(null);
@@ -31,24 +31,25 @@ export function useWebSocket(sessionId: string | null) {
     const [pipelineResult, setPipelineResult] = useState<any>(null);
     const [isRunning, setIsRunning] = useState(false);
 
-    // Fallback: HTTP polling for results when WS is flaky
+    // Fallback: HTTP polling — ONLY used after WebSocket max retries exhausted
     const startPolling = useCallback(() => {
         if (!sessionId || pollTimer.current) return;
+        console.log('[Pipeline] WebSocket unavailable, falling back to HTTP polling every 15s');
         pollTimer.current = setInterval(async () => {
             try {
                 const result: any = await getPipelineResults(sessionId);
-                // Only accept truly completed results (has semaphore = pipeline finished)
+                // Only accept truly completed results
                 if (result && result.completed && result.semaphore) {
+                    console.log('[Pipeline] Got completed result via polling');
                     setPipelineResult(result);
                     setIsRunning(false);
-                    // Stop polling once we have results
                     if (pollTimer.current) {
                         clearInterval(pollTimer.current);
                         pollTimer.current = null;
                     }
                 }
             } catch {
-                // Results not ready yet, keep polling
+                // Results not ready yet, keep polling silently
             }
         }, POLL_INTERVAL);
     }, [sessionId]);
@@ -63,9 +64,14 @@ export function useWebSocket(sessionId: string | null) {
     const connect = useCallback(() => {
         if (!sessionId) return;
         if (reconnectCount.current >= MAX_RECONNECT_ATTEMPTS) {
-            console.warn(`[WS] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached, falling back to polling`);
+            console.warn(`[WS] Max reconnect attempts reached, falling back to polling`);
             startPolling();
             return;
+        }
+
+        // Close any existing WS before creating a new one
+        if (wsRef.current) {
+            try { wsRef.current.close(); } catch { /* ignore */ }
         }
 
         const ws = new WebSocket(getWebSocketUrl(sessionId));
@@ -73,21 +79,24 @@ export function useWebSocket(sessionId: string | null) {
 
         ws.onopen = () => {
             setConnected(true);
-            reconnectCount.current = 0; // Reset on successful connect
-            stopPolling(); // WS is working, stop polling
+            reconnectCount.current = 0;
+            stopPolling(); // WS works, no need for polling
         };
 
         ws.onclose = () => {
             setConnected(false);
-            reconnectCount.current += 1;
-            const delay = RECONNECT_BASE_DELAY * Math.min(reconnectCount.current, 5);
-            reconnectTimer.current = setTimeout(() => {
-                if (sessionId) connect();
-            }, delay);
+            // Only reconnect if we haven't been replaced by a newer connection
+            if (wsRef.current === ws) {
+                reconnectCount.current += 1;
+                const delay = RECONNECT_BASE_DELAY * Math.min(reconnectCount.current, 5);
+                reconnectTimer.current = setTimeout(() => {
+                    if (sessionId) connect();
+                }, delay);
+            }
         };
 
         ws.onerror = () => {
-            // onclose will fire after onerror, so reconnect is handled there
+            // onclose fires after onerror, reconnect handled there
         };
 
         ws.onmessage = (event) => {
@@ -101,7 +110,6 @@ export function useWebSocket(sessionId: string | null) {
                         setAgentStatuses({});
                         setAgentLogs({});
                         setPipelineResult(null);
-                        // Initialize all agents as idle
                         msg.agents?.forEach(name => {
                             setAgentStatuses(prev => ({ ...prev, [name]: 'idle' }));
                         });
@@ -158,6 +166,5 @@ export function useWebSocket(sessionId: string | null) {
         pipelineResult,
         isRunning,
         sendMessage,
-        startPolling,
     };
 }

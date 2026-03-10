@@ -207,8 +207,6 @@ export default function Home() {
 
   const handleStartPipeline = async () => {
     if (!sessionId) return;
-    // Start HTTP polling as a fallback in case WebSocket doesn't deliver
-    ws.startPolling();
     // Fire-and-forget: let WebSocket drive the UI updates in real-time
     startPipeline(sessionId)
       .then((result) => {
