@@ -21,11 +21,11 @@ BLOCKED_DOMAINS = ["sreality.cz", "bezrealitky.cz", "idnes.cz"]
 
 # Image Processing
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
-MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
+MAX_IMAGE_SIZE_BYTES = 600 * 1024  # 600 KB to prevent Render OOM on large batches
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tiff", ".bmp"}
 SUPPORTED_PDF_EXTENSIONS = {".pdf"}
 OUTPUT_FORMAT = "JPEG"
-JPEG_QUALITY = 85
+JPEG_QUALITY = 75
 
 # Agent Thresholds – Strazce (BR-G4)
 MIN_TOTAL_PHOTOS = 9
