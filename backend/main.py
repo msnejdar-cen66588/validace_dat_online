@@ -7,7 +7,7 @@ from typing import Optional
 import io
 from pypdf import PdfReader
 
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Body
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -214,6 +214,7 @@ async def upload_files(
 @app.post("/api/pipeline/start/{session_id}")
 async def start_pipeline(
     session_id: str,
+    background_tasks: BackgroundTasks,
     custom_prompts: Optional[dict] = None,
 ):
     """Start the validation pipeline for a session."""
@@ -240,17 +241,29 @@ async def start_pipeline(
         "custom_prompts": custom_prompts or {},
     }
 
-    # Run pipeline (async)
-    result = await orchestrator.run_pipeline(context)
+    async def run_and_store():
+        try:
+            # Run pipeline (async)
+            result = await orchestrator.run_pipeline(context)
 
-    # Attach property data
-    result["property_data"] = session.get("property_data")
-    result["property_address"] = session.get("property_address")
+            # Attach property data
+            result["property_data"] = session.get("property_data")
+            result["property_address"] = session.get("property_address")
 
-    # Store result
-    sessions[session_id]["result"] = result
+            # Store result
+            sessions[session_id]["result"] = result
+        except Exception as e:
+            print(f"Pipeline error for session {session_id}: {e}")
 
-    return result
+    # Dispatch to background
+    background_tasks.add_task(run_and_store)
+
+    return {
+        "status": "started",
+        "message": "Pipeline runs in the background. Use WebSocket for updates.",
+        "pipeline_id": orchestrator.pipeline_id,
+        "session_id": session_id,
+    }
 
 
 @app.get("/api/pipeline/results/{session_id}")

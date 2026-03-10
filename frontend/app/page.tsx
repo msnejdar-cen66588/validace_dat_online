@@ -210,8 +210,8 @@ export default function Home() {
     // Fire-and-forget: let WebSocket drive the UI updates in real-time
     startPipeline(sessionId)
       .then((result) => {
-        // Fallback: if WS didn't deliver the result, use HTTP response
-        if (!ws.pipelineResult) {
+        // Fallback: if WS didn't deliver the result, use HTTP response (but only if it's the full result with agents)
+        if (!ws.pipelineResult && result.agents) {
           setPipelineResult(result);
         }
       })
