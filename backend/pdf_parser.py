@@ -31,6 +31,7 @@ class PropertyData:
     typ_strechy: Optional[str] = None            # e.g. "sedlová"
     podsklepeni: Optional[str] = None            # e.g. "ANO" / "NE"
     celkova_podlahova_plocha: Optional[str] = None  # e.g. "175 m²"
+    plocha_pozemku: Optional[str] = None         # e.g. "600 m2"
     typ_vytapeni: Optional[str] = None           # e.g. "lokální - Plynový standardní kotel (starší), WAW"
     adresa: Optional[str] = None                 # e.g. "Květná 1740, 68001 Boskovice"
     podkrovi: Optional[str] = None               # e.g. "ANO" / "NE"
@@ -61,6 +62,7 @@ _KNOWN_LABELS = [
     r"M[áa]te\s+sol", r"Jak\s+vyu[žz][ií]v", r"Kolik\s+m[áa]te",
     r"Jak\s+dlouho", r"V[ýy]kon\s+st[áa]vaj",
     r"P[řr][ií]pojka\s+plyn", r"P[řr][ií]pojka\s+elektro",
+    r"Plocha\s+pozemku"
 ]
 
 _LABEL_START_RE = re.compile(
@@ -124,6 +126,10 @@ _PATTERNS = {
     "celkova_podlahova_plocha": [
         # Both: "Celková podlahová plocha 175 m2" or "Celková podlahová plocha: 60 m²"
         re.compile(r"Celkov[áa]\s+podlahov[áa]\s+plocha\s*:?\s*(.+)", re.IGNORECASE),
+        re.compile(r"U[žz]itn[áa]\s+plocha\s*:?\s*(.+)", re.IGNORECASE),
+    ],
+    "plocha_pozemku": [
+        re.compile(r"Plocha\s+pozemku\s*:?\s*(.+)", re.IGNORECASE),
     ],
     "typ_vytapeni": [
         # New: "Typ vytápění: lokální - Elektrické tepelné čerpadlo vzduch/voda"
@@ -180,6 +186,8 @@ def parse_pdf(pdf_bytes: bytes) -> PropertyData:
         "podsklepení": "podsklepeni",
         "podsklepeno": "podsklepeni",
         "celková podlahová plocha": "celkova_podlahova_plocha",
+        "užitná plocha": "celkova_podlahova_plocha",
+        "plocha pozemku": "plocha_pozemku",
         "typ vytápění": "typ_vytapeni",
         "vytápění": "typ_vytapeni",
         "adresa nemovitosti": "adresa",

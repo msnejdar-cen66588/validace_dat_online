@@ -68,12 +68,48 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
         });
     };
 
+    const K_LABELS: Record<string, string> = {
+        'k1': 'K1: Redukce pram.',
+        'k2': 'K2: Velikost',
+        'k3': 'K3: Poloha',
+        'k4': 'K4: Provedení',
+        'k5': 'K5: Celk. stav',
+        'k6': 'K6: Vliv pozemku',
+        'k7': 'K7: Úvaha',
+        'k8': 'K8: En. náročnost',
+    };
+
     // Vypocet upravene NHZP na zaklade manualnich koeficientu K1-K8
     let adjustedNhzp = 0;
     if (valuation?.details?.odhad_czk) {
         adjustedNhzp = valuation.details.odhad_czk;
+        const analyzedArea = parseFloat(String(setupData.plocha).replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
         const samples = valuation.details.vzorky || [];
-        if (samples.length > 0) {
+
+        if (samples.length > 0 && analyzedArea > 0) {
+            let totalUpravenaJc = 0;
+            samples.forEach((s: any) => {
+                const kData = customCoeffs[s.id] || s.koeficienty || {};
+                let isValue = 1.0;
+                ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
+                    const strVal = String(kData[k] ?? '1.0');
+                    const num = parseFloat(strVal.replace(',', '.')) || 1.0;
+                    isValue *= num;
+                });
+
+                // JC vzorku = cena / plocha_vzorku
+                const sampleArea = s.velikost_domu_m2 || 1;
+                const jc = s.cena_czk / sampleArea;
+
+                // Upravená JC = JC * Index odlišnosti
+                const upravenaJc = jc * isValue;
+                totalUpravenaJc += upravenaJc;
+            });
+
+            const avgUpravenaJc = totalUpravenaJc / samples.length;
+            adjustedNhzp = Math.round(avgUpravenaJc * analyzedArea);
+        } else if (samples.length > 0) {
+            // Nemáme plochu, raději pracujeme s hrubou cenou (např. byt vs dům fallback)
             let totalVal = 0;
             samples.forEach((s: any) => {
                 const kData = customCoeffs[s.id] || s.koeficienty || {};
@@ -263,7 +299,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                     const currentCoeff = kData[k] !== undefined ? String(kData[k]) : '1';
                                                     return (
                                                         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                                            <label style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', textAlign: 'center' }}>{k}</label>
+                                                            <label style={{ fontSize: '10px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={K_LABELS[k]}>{K_LABELS[k]}</label>
                                                             <input
                                                                 type="text"
                                                                 value={currentCoeff}

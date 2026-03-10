@@ -57,6 +57,7 @@ export interface PropertyData {
     typ_strechy: string | null;
     podsklepeni: string | null;
     celkova_podlahova_plocha: string | null;
+    plocha_pozemku: string | null;
     typ_vytapeni: string | null;
     adresa: string | null;
     podkrovi: string | null;

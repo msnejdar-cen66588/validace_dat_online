@@ -14,6 +14,7 @@ from config import GEMINI_API_KEY, GEMINI_MODEL
 
 
 VALUATION_PROMPT = """Jsi expertní AI agent pro online oceňování rezidenčních nemovitostí (rodinných domů) porovnávací metodou podle standardů bankovních institucí v ČR.
+Striktně dodržuj profesionální terminologii certifikovaného bankovního odhadce (např. obvyklá cena, oceňovaná nemovitost, srovnávací vzorek, index odlišnosti, redukce pramene ceny).
 
 TVŮJ ÚKOL:
 Na základě dodaných parametrů konkrétního rodinného domu (velikost, stav, adresa/lokalita) vypracuj odhad jeho obvyklé tržní ceny (NHZP) pomocí POROVNÁVACÍ METODY s využitím 8 koeficientů (K1 až K8).
@@ -38,7 +39,7 @@ U každého vzorku stanovíš 8 koeficientů. Pokud jsou vlastnosti totožné s 
 Vrať POUZE striktně formátovaný JSON podle této struktury, nic jiného:
 {
   "zakladni_odhad_czk": 8500000,
-  "duvod_odhadu": "Krátké shrnutí pro tuto lokaci.",
+  "duvod_odhadu": "Profesionální odůvodnění zjištěné obvyklé ceny, stručná analýza trhu v dané lokalitě a komentář zpracovatele k výběru srovnávacích vzorků.",
   "vzorky": [
     {
       "id": 1,
@@ -51,7 +52,7 @@ Vrať POUZE striktně formátovaný JSON podle této struktury, nic jiného:
       "koeficienty": {
         "k1": 0.85, "k2": 1.00, "k3": 1.05, "k4": 1.00, "k5": 0.90, "k6": 1.00, "k7": 1.00, "k8": 1.00
       },
-      "oduvodneni_koeficientu": "Vzorek 1 má lepší izolaci (k5) a atraktivní polohu (k3)."
+      "oduvodneni_koeficientu": "Profesionální zdůvodnění odlišností: Vzorek 1 je po nedávné rekonstrukci (k5=0.90) a má objektivně lepší polohu (k3=1.05)."
     }
   ]
 }
