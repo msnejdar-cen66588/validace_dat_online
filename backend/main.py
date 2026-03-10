@@ -36,6 +36,8 @@ app.add_middleware(
 # In-memory session store
 sessions: dict[str, dict] = {}
 orchestrators: dict[str, PipelineOrchestrator] = {}
+pipeline_results: dict[str, dict] = {}
+global_websockets: dict[str, list[WebSocket]] = {}
 
 
 @app.get("/api/health")
@@ -227,6 +229,12 @@ async def start_pipeline(
     orchestrator = PipelineOrchestrator(session_id)
     orchestrators[session_id] = orchestrator
 
+    # Attach any websockets that connected before orchestrator creation
+    if session_id in global_websockets:
+        for ws in global_websockets[session_id]:
+            if ws not in orchestrator.active_connections:
+                orchestrator.active_connections.append(ws)
+
     # Build context
     context = {
         "session_id": session_id,
@@ -360,8 +368,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket for real-time pipeline updates."""
     await websocket.accept()
 
+    if session_id not in global_websockets:
+        global_websockets[session_id] = []
+    global_websockets[session_id].append(websocket)
+
     orchestrator = orchestrators.get(session_id)
-    if orchestrator:
+    if orchestrator and websocket not in orchestrator.active_connections:
         orchestrator.active_connections.append(websocket)
 
     try:
@@ -382,6 +394,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     })
 
     except WebSocketDisconnect:
+        if session_id in global_websockets and websocket in global_websockets[session_id]:
+            global_websockets[session_id].remove(websocket)
         if orchestrator and websocket in orchestrator.active_connections:
             orchestrator.active_connections.remove(websocket)
 
