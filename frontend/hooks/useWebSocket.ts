@@ -36,8 +36,9 @@ export function useWebSocket(sessionId: string | null) {
         if (!sessionId || pollTimer.current) return;
         pollTimer.current = setInterval(async () => {
             try {
-                const result = await getPipelineResults(sessionId);
-                if (result && result.agents) {
+                const result: any = await getPipelineResults(sessionId);
+                // Only accept truly completed results (has semaphore = pipeline finished)
+                if (result && result.completed && result.semaphore) {
                     setPipelineResult(result);
                     setIsRunning(false);
                     // Stop polling once we have results

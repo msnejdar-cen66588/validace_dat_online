@@ -24,3 +24,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+backend/google-credentials.json

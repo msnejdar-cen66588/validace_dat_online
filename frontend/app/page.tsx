@@ -238,7 +238,7 @@ export default function Home() {
   // Use WS pipeline result when available
   const finalResult = ws.pipelineResult || pipelineResult;
 
-  if (finalResult && step !== 'results') {
+  if (finalResult && finalResult.semaphore && finalResult.semaphore !== 'UNKNOWN' && step !== 'results') {
     setStep('results');
     setPipelineResult(finalResult);
   }

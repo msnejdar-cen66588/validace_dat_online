@@ -284,16 +284,14 @@ async def get_results(session_id: str):
     result = session.get("result")
     
     if not result:
-        # Return current state if still running
+        # Pipeline still running or not started yet
         orchestrator = orchestrators.get(session_id)
-        if orchestrator:
-            state = orchestrator.get_state()
-            state["property_data"] = session.get("property_data")
-            state["property_address"] = session.get("property_address")
-            return state
-        raise HTTPException(status_code=404, detail="No results yet.")
+        return {
+            "completed": False,
+            "is_running": orchestrator.is_running if orchestrator else False,
+        }
 
-    return result
+    return {"completed": True, **result}
 
 
 @app.get("/api/pipeline/state/{session_id}")
