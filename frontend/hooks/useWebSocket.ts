@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getWebSocketUrl } from '@/lib/api';
+import { getWebSocketUrl, getPipelineResults } from '@/lib/api';
 
 export interface WSMessage {
     type: string;
@@ -15,8 +15,15 @@ export interface WSMessage {
     agents?: string[];
 }
 
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY = 2000;
+const POLL_INTERVAL = 5000;
+
 export function useWebSocket(sessionId: string | null) {
     const wsRef = useRef<WebSocket | null>(null);
+    const reconnectCount = useRef(0);
+    const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
     const [connected, setConnected] = useState(false);
     const [messages, setMessages] = useState<WSMessage[]>([]);
     const [agentStatuses, setAgentStatuses] = useState<Record<string, string>>({});
@@ -24,19 +31,62 @@ export function useWebSocket(sessionId: string | null) {
     const [pipelineResult, setPipelineResult] = useState<any>(null);
     const [isRunning, setIsRunning] = useState(false);
 
+    // Fallback: HTTP polling for results when WS is flaky
+    const startPolling = useCallback(() => {
+        if (!sessionId || pollTimer.current) return;
+        pollTimer.current = setInterval(async () => {
+            try {
+                const result = await getPipelineResults(sessionId);
+                if (result && result.agents) {
+                    setPipelineResult(result);
+                    setIsRunning(false);
+                    // Stop polling once we have results
+                    if (pollTimer.current) {
+                        clearInterval(pollTimer.current);
+                        pollTimer.current = null;
+                    }
+                }
+            } catch {
+                // Results not ready yet, keep polling
+            }
+        }, POLL_INTERVAL);
+    }, [sessionId]);
+
+    const stopPolling = useCallback(() => {
+        if (pollTimer.current) {
+            clearInterval(pollTimer.current);
+            pollTimer.current = null;
+        }
+    }, []);
+
     const connect = useCallback(() => {
         if (!sessionId) return;
+        if (reconnectCount.current >= MAX_RECONNECT_ATTEMPTS) {
+            console.warn(`[WS] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached, falling back to polling`);
+            startPolling();
+            return;
+        }
 
         const ws = new WebSocket(getWebSocketUrl(sessionId));
         wsRef.current = ws;
 
-        ws.onopen = () => setConnected(true);
+        ws.onopen = () => {
+            setConnected(true);
+            reconnectCount.current = 0; // Reset on successful connect
+            stopPolling(); // WS is working, stop polling
+        };
+
         ws.onclose = () => {
             setConnected(false);
-            // Auto-reconnect after 2s
-            setTimeout(() => {
+            reconnectCount.current += 1;
+            const delay = RECONNECT_BASE_DELAY * Math.min(reconnectCount.current, 5);
+            reconnectTimer.current = setTimeout(() => {
                 if (sessionId) connect();
-            }, 2000);
+            }, delay);
+        };
+
+        ws.onerror = () => {
+            // onclose will fire after onerror, so reconnect is handled there
         };
 
         ws.onmessage = (event) => {
@@ -74,20 +124,24 @@ export function useWebSocket(sessionId: string | null) {
                     case 'pipeline_complete':
                         setIsRunning(false);
                         setPipelineResult(msg.result);
+                        stopPolling();
                         break;
                 }
             } catch (e) {
                 console.error('WS parse error:', e);
             }
         };
-    }, [sessionId]);
+    }, [sessionId, startPolling, stopPolling]);
 
     useEffect(() => {
+        reconnectCount.current = 0;
         connect();
         return () => {
             wsRef.current?.close();
+            if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+            stopPolling();
         };
-    }, [connect]);
+    }, [connect, stopPolling]);
 
     const sendMessage = useCallback((msg: any) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -103,5 +157,6 @@ export function useWebSocket(sessionId: string | null) {
         pipelineResult,
         isRunning,
         sendMessage,
+        startPolling,
     };
 }
