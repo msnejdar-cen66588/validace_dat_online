@@ -109,8 +109,8 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                 // JC vzorku = cena / plocha_vzorku
                 const jc = s.cena_czk / sampleArea;
 
-                // Upravená JC = JC * Index odlišnosti
-                const upravenaJc = jc * isValue;
+                // Upravená JC = JC / Index odlišnosti (K > 1.0 znamená, že vzorek je horší, takže jeho cena se musí snížit)
+                const upravenaJc = jc / isValue;
                 totalUpravenaJc += upravenaJc;
             });
 
@@ -128,7 +128,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                     if (num > 5.0) num = num / 100.0;
                     isValue *= num;
                 });
-                totalVal += (s.cena_czk * isValue);
+                totalVal += (s.cena_czk / isValue);
             });
             adjustedNhzp = Math.round(totalVal / samples.length);
         }
