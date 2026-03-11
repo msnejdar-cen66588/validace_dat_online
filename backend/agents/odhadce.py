@@ -18,15 +18,16 @@ Striktně dodržuj profesionální terminologii certifikovaného bankovního odh
 
 TVŮJ ÚKOL:
 Na základě dodaných parametrů konkrétního rodinného domu (velikost, stav, adresa/lokalita) vypracuj odhad jeho obvyklé tržní ceny (NHZP) pomocí POROVNÁVACÍ METODY s využitím 8 koeficientů (K1 až K8).
-Vytvoříš ze svých obsáhlých znalostí realitního trhu v ČR 3 vysoce realistické "jako by aktuální" nabídky podobných domů ve stejné nebo velmi podobné lokalitě.
+Vytvoříš ze svých obsáhlých znalostí realitního trhu v ČR a na základě vyhledávání na internetu 3 vysoce realistické aktuální nabídky podobných domů ve stejné nebo velmi podobné lokalitě.
 
 METODIKA a KROK 1:
-1. Vygeneruj 3 konkrétní vzorky (nabídky rodinných domů) pro srovnání.
-   - U každého vzorku přidej pole "obrazek_url", které bude mít vždy tuto přesnou hodnotu: "https://loremflickr.com/600/400/house,exterior?lock={id}", kde místo {id} vlož id daného vzorku.
+1. Vyhledej na internetu (sreality.cz, bezrealitky.cz, idnes reality atd.) 3 konkrétní reálné vzorky (aktuální ceníkové nabídky rodinných domů) pro srovnání.
+   - U každého vzorku MUSÍŠ doplnit pole "zdroj_url", které bude odkazovat na konkrétní inzerát nebo zdroj na internetu.
+   - U každého vzorku doplň "obrazek_url" tak, že se pokusíš získat odkaz na náhledovou fotografii inzerátu z vyhledávání. Pokud nelze skutečnou fotku z inzerátu získat, vlož "https://loremflickr.com/600/400/house,exterior?lock={id}".
    - Jednotková cena (Kč/m2) oceňované nemovitosti nesmí být nikdy vyšší než cena inzerovaná u totožného objektu.
 
 KROK 2: APLIKACE KOREKČNÍCH KOEFICIENTŮ (K1 až K8)
-U každého vzorku stanovíš 8 koeficientů. Pokud jsou vlastnosti totožné s naším domem, K = 1.00. Pokud se srovnávací vzorek jeví LEPŠÍ než náš dům, použij K < 1.00. Pokud se vzorek jeví HORŠÍ, použij K > 1.00.
+U každého vzorku stanovíš 8 koeficientů. Pokud jsou vlastnosti totožné s naším domem, K = 1.00. Pokud se srovnávací vzorek jeví LEPŠÍ než náš dům, použij K < 1.00. Pokud se vzorek jeví HORŠÍ, použij K > 1.00. (Koeficienty zapisuj ve formátu např. 0.85, 1.05 - NIKDY jako celá čísla 85 nebo procenta).
 - K1 (Redukce pramene ceny): 0.70 až 1.00 (typicky 0.85 pro inzerci).
 - K2 (Velikost objektu): Poměr velikosti (zde dej 1.00, velikost zohledníme přes metry čtvereční na frontendu).
 - K3 (Poloha): 0.90 až 1.10. Zohledňuje okolí a dostupnost.
@@ -48,7 +49,8 @@ Vrať POUZE striktně formátovaný JSON podle této struktury, nic jiného:
       "velikost_pozemku_m2": 600,
       "stav": "Po řečné rekonstrukci",
       "cena_czk": 8800000,
-      "obrazek_url": "https://loremflickr.com/600/400/house,exterior?lock=1",
+      "zdroj_url": "https://www.sreality.cz/detail/prodej/dum/rodinny/...",
+      "obrazek_url": "https://d18-a.sdn.cz/d_18/c_img_....jpeg",
       "koeficienty": {
         "k1": 0.85, "k2": 1.00, "k3": 1.05, "k4": 1.00, "k5": 0.90, "k6": 1.00, "k7": 1.00, "k8": 1.00
       },
@@ -109,17 +111,31 @@ class OdhadceAgent(BaseAgent):
 
         try:
             self.log("Generuji odhad a porovnávací vzorky...", "thinking")
+            # We must remove response_mime_type="application/json" because Gemini 
+            # currently does not support controlled generation (JSON mode) coupled with the Search tool.
+            prompt_text += "\n\nDŮLEŽITÉ: Tvá odpověď musí být POUZE validní čistý JSON objekt bez jakéhokoliv dalšího textu nebo Markdown formátování (žádné ```json ... ```)."
+            
             response = await self.client.aio.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=prompt_text,
                 config=types.GenerateContentConfig(
                     system_instruction=self.system_prompt,
-                    response_mime_type="application/json",
                     max_output_tokens=1500,
+                    tools=[{"google_search": {}}],
                 ),
             )
 
-            result_json = json.loads(response.text)
+            # In case LLM still wraps in markdown
+            raw_text = response.text.strip()
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip()
+
+            result_json = json.loads(raw_text)
             zakladni_odhad = result_json.get("zakladni_odhad_czk", 0)
             
             # Format to millions for summary
@@ -143,7 +159,10 @@ class OdhadceAgent(BaseAgent):
             )
 
         except Exception as e:
-            self.log(f"Chyba při tvorbě odhadu: {e}", "error")
+            import traceback
+            tb = traceback.format_exc()
+            print(f"Exception from gemini: {tb}")
+            self.log(f"Chyba při tvorbě odhadu:\n{tb}", "error")
             return AgentResult(
                 status=AgentStatus.FAIL,
                 summary="Odhad se nepodařilo dokončit kvůli systémové chybě.",

@@ -322,10 +322,7 @@ async def get_pipeline_state(session_id: str):
 @app.post("/api/pipeline/valuation/{session_id}")
 async def generate_valuation(session_id: str, payload: dict = Body(None)):
     """Run just the Valuation (Odhadce) agent to get comparative market estimation."""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
-        
-    session = sessions[session_id]
+    session = sessions.get(session_id, {})
     
     # Use provided overrides if any
     custom_address = payload.get("adresa") if payload else None
@@ -336,7 +333,7 @@ async def generate_valuation(session_id: str, payload: dict = Body(None)):
     # We provide this override mapping in context
     context = {
         "session_id": session_id,
-        "images": session["images"],
+        "images": session.get("images", []),
         "property_address": session.get("property_address", ""),
         "property_data": session.get("property_data"),
         "valuation_overrides": {
@@ -351,7 +348,7 @@ async def generate_valuation(session_id: str, payload: dict = Body(None)):
     result = await agent.run(context)
     
     # Store result optionally on session if needed
-    if "valuation" not in session:
+    if session_id in sessions and "valuation" not in session:
         session["valuation"] = result.to_dict()
         
     return result.to_dict()

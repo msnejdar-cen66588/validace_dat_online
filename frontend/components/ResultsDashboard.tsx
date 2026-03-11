@@ -93,12 +93,20 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                 let isValue = 1.0;
                 ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
                     const strVal = String(kData[k] ?? '1.0');
-                    const num = parseFloat(strVal.replace(',', '.')) || 1.0;
+                    let num = parseFloat(strVal.replace(',', '.')) || 1.0;
+                    // Handle edge cases where LLM returns percentages like 85 instead of 0.85
+                    if (num > 5.0) {
+                        num = num / 100.0;
+                    }
                     isValue *= num;
                 });
 
+                // Spolehlivé vyparsování velikosti pro vzorek (LLM občas vrátí string např. "150 m2")
+                const strVelikost = String(s.velikost_domu_m2 ?? '1');
+                const parsedSampleArea = parseFloat(strVelikost.replace(/[^0-9.]/g, '')) || 1;
+                const sampleArea = Math.max(parsedSampleArea, 10); // Minimum 10m2 fallback
+
                 // JC vzorku = cena / plocha_vzorku
-                const sampleArea = s.velikost_domu_m2 || 1;
                 const jc = s.cena_czk / sampleArea;
 
                 // Upravená JC = JC * Index odlišnosti
@@ -116,7 +124,8 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                 let isValue = 1.0;
                 ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
                     const strVal = String(kData[k] ?? '1.0');
-                    const num = parseFloat(strVal.replace(',', '.')) || 1.0;
+                    let num = parseFloat(strVal.replace(',', '.')) || 1.0;
+                    if (num > 5.0) num = num / 100.0;
                     isValue *= num;
                 });
                 totalVal += (s.cena_czk * isValue);
@@ -282,8 +291,15 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                             )}
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                                 <div>
-                                                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px' }}>{s.adresa}</div>
-                                                    <div style={{ fontSize: '13px', color: '#64748b' }}>Dům: {s.velikost_domu_m2} m² | Pozemek: {s.velikost_pozemku_m2} m²</div>
+                                                    <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        {s.adresa}
+                                                        {s.zdroj_url && (
+                                                            <a href={s.zdroj_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', fontWeight: 600, color: '#2563eb', textDecoration: 'none', background: '#eff6ff', padding: '2px 8px', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
+                                                                Otevřít inzerát ↗
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                    <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>Dům: {s.velikost_domu_m2} m² | Pozemek: {s.velikost_pozemku_m2} m²</div>
                                                     <div style={{ fontSize: '13px', color: '#64748b' }}>Stav: {s.stav}</div>
                                                 </div>
                                                 <div style={{ textAlign: 'right' }}>
