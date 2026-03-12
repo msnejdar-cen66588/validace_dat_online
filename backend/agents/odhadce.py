@@ -149,13 +149,25 @@ async def _fetch_sreality_samples(district_id: int | None, count: int = 5) -> li
         size_m2 = int(m2_matches[0]) if m2_matches else None
         land_m2 = int(m2_matches[1]) if len(m2_matches) > 1 else None
 
+        # Lidsky čitelná adresa ze seo.locality slugu: "oslavany-oslavany-hlavni" → "Oslavany, Hlavní"
+        def slug_to_address(slug: str) -> str:
+            parts = [p for p in slug.split("-") if p]
+            # Odstraň duplikáty po sobě jdoucí (např. "oslavany", "oslavany")
+            unique = []
+            for p in parts:
+                if not unique or p != unique[-1]:
+                    unique.append(p)
+            return ", ".join(w.capitalize() for w in unique if w)
+
+        adresa = slug_to_address(locality_slug) if locality_slug else name
+
         price = e.get("price_czk", {}).get("value_raw", 0) or 0
         if price <= 1:   # cena na vyžádání
             continue
 
         results.append({
             "id": i,
-            "adresa": name,
+            "adresa": adresa,
             "cena_czk": price,
             "velikost_domu_m2": size_m2 or 120,
             "velikost_pozemku_m2": land_m2 or 0,
