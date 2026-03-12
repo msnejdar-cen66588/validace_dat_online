@@ -101,8 +101,8 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
             let num = parseFloat(strVal.replace(',', '.')) || 1.0;
             // Ochrana proti tomu, když AI vrátí procenta (85 místo 0.85)
             if (num > 5.0) num = num / 100.0;
-            // Koeficient musí být v rozumném rozmezí 0.1 – 3.0
-            return Math.max(0.1, Math.min(num, 3.0));
+            // Koeficient musí být v rozumném rozmezí 0.55 – 1.45
+            return Math.max(0.55, Math.min(num, 1.45));
         };
 
         if (samples.length > 0 && analyzedArea > 0) {
