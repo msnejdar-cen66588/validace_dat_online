@@ -79,56 +79,72 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
         'k8': 'K8: En. náročnost',
     };
 
-    // Vypocet upravene NHZP na zaklade manualnich koeficientu K1-K8
+    // ── Výpočet NHZP porovnávací metodou ──
+    // 1. Pro každý vzorek: jednotková cena (JC) = cena_vzorku / plocha_vzorku
+    // 2. Index odlišnosti (IO) = K1 × K2 × ... × K8
+    //    - K < 1.0 → vzorek je LEPŠÍ než náš dům → snižuje cenu
+    //    - K > 1.0 → vzorek je HORŠÍ → zvyšuje cenu
+    // 3. Upravená JC = JC × IO
+    // 4. NHZP = průměr(upravené JC) × podlahová plocha našeho domu
     let adjustedNhzp = 0;
     if (valuation?.details?.odhad_czk) {
         adjustedNhzp = valuation.details.odhad_czk;
-        const analyzedArea = parseFloat(String(setupData.plocha).replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
         const samples = valuation.details.vzorky || [];
+
+        // Podlahová plocha NAŠEHO domu (ne pozemku!)
+        const rawArea = parseFloat(String(setupData.plocha).replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
+        // Sanity check: podlahová plocha RD by neměla přesáhnout 500 m²
+        const analyzedArea = rawArea > 0 ? Math.min(rawArea, 500) : 0;
+
+        const parseK = (val: any): number => {
+            const strVal = String(val ?? '1.0');
+            let num = parseFloat(strVal.replace(',', '.')) || 1.0;
+            // Ochrana proti tomu, když AI vrátí procenta (85 místo 0.85)
+            if (num > 5.0) num = num / 100.0;
+            // Koeficient musí být v rozumném rozmezí 0.1 – 3.0
+            return Math.max(0.1, Math.min(num, 3.0));
+        };
 
         if (samples.length > 0 && analyzedArea > 0) {
             let totalUpravenaJc = 0;
+
             samples.forEach((s: any) => {
                 const kData = customCoeffs[s.id] || s.koeficienty || {};
-                let isValue = 1.0;
+
+                // Index odlišnosti = součin K1..K8
+                let io = 1.0;
                 ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
-                    const strVal = String(kData[k] ?? '1.0');
-                    let num = parseFloat(strVal.replace(',', '.')) || 1.0;
-                    // Handle edge cases where LLM returns percentages like 85 instead of 0.85
-                    if (num > 5.0) {
-                        num = num / 100.0;
-                    }
-                    isValue *= num;
+                    io *= parseK(kData[k]);
                 });
 
-                // Spolehlivé vyparsování velikosti pro vzorek (LLM občas vrátí string např. "150 m2")
-                const strVelikost = String(s.velikost_domu_m2 ?? '1');
-                const parsedSampleArea = parseFloat(strVelikost.replace(/[^0-9.]/g, '')) || 1;
-                const sampleArea = Math.max(parsedSampleArea, 10); // Minimum 10m2 fallback
-
-                // JC vzorku = cena / plocha_vzorku
+                // Jednotková cena vzorku (Kč/m²)
+                const strVelikost = String(s.velikost_domu_m2 ?? '0');
+                const sampleArea = Math.max(parseFloat(strVelikost.replace(/[^0-9.]/g, '')) || 1, 10);
                 const jc = s.cena_czk / sampleArea;
 
-                // Upravená JC = JC / Index odlišnosti (K > 1.0 znamená, že vzorek je horší, takže jeho cena se musí snížit)
-                const upravenaJc = jc / isValue;
-                totalUpravenaJc += upravenaJc;
+                // Upravená JC = JC × IO
+                totalUpravenaJc += jc * io;
             });
 
             const avgUpravenaJc = totalUpravenaJc / samples.length;
-            adjustedNhzp = Math.round(avgUpravenaJc * analyzedArea);
+            const computed = Math.round(avgUpravenaJc * analyzedArea);
+
+            // Sanity check: výsledek by neměl být více než 3× AI odhad
+            const aiEstimate = valuation.details.odhad_czk;
+            adjustedNhzp = (aiEstimate > 0 && computed > aiEstimate * 3)
+                ? aiEstimate
+                : computed;
+
         } else if (samples.length > 0) {
-            // Nemáme plochu, raději pracujeme s hrubou cenou (např. byt vs dům fallback)
+            // Fallback bez plochy – průměr cen vzorků × IO
             let totalVal = 0;
             samples.forEach((s: any) => {
                 const kData = customCoeffs[s.id] || s.koeficienty || {};
-                let isValue = 1.0;
+                let io = 1.0;
                 ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
-                    const strVal = String(kData[k] ?? '1.0');
-                    let num = parseFloat(strVal.replace(',', '.')) || 1.0;
-                    if (num > 5.0) num = num / 100.0;
-                    isValue *= num;
+                    io *= parseK(kData[k]);
                 });
-                totalVal += (s.cena_czk / isValue);
+                totalVal += s.cena_czk * io;
             });
             adjustedNhzp = Math.round(totalVal / samples.length);
         }
