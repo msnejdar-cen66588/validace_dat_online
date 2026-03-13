@@ -92,38 +92,64 @@ DISTRICT_MAP: dict[str, int] = {
 }
 
 
-def _guess_district_id(address: str) -> int | None:
-    """Najde district_id ze slugovaného pole adresa. Fallback None = celá ČR."""
-    addr_lower = address.lower()
-    for keyword, did in DISTRICT_MAP.items():
-        if keyword in addr_lower:
-            return did
+async def _geocode_address(address: str) -> tuple[float, float] | None:
+    """Geocode address to (lat, lon) using Nominatim (free OpenStreetMap API)."""
+    params = {
+        "q": address + ", Česká republika",
+        "format": "json",
+        "limit": 1,
+        "countrycodes": "cz",
+    }
+    headers = {"User-Agent": "OnlineOceneni/1.0 (valuation-tool)"}
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get("https://nominatim.openstreetmap.org/search",
+                                    params=params, headers=headers)
+            resp.raise_for_status()
+            results = resp.json()
+            if results:
+                return float(results[0]["lat"]), float(results[0]["lon"])
+    except Exception as e:
+        print(f"Nominatim geocoding error: {e}")
     return None
 
 
-async def _fetch_sreality_samples(district_id: int | None, count: int = 5) -> list[dict]:
-    """Načte reálné inzeráty RD ze sreality.cz API."""
+async def _fetch_sreality_samples(
+    lat: float | None,
+    lon: float | None,
+    floor_area_m2: int,
+    radius_km: int = 5,
+    count: int = 5,
+) -> list[dict]:
+    """Načte reálné inzeráty RD ze sreality.cz API filtrované GPS a plochou."""
+
+    # Velikostní rozsah: plocha ±50 % (min 40 m², max 400 m²)
+    size_min = max(40, int(floor_area_m2 * 0.5))
+    size_max = min(400, int(floor_area_m2 * 1.5))
+
     params: dict = {
         "category_main_cb": 2,    # nemovitosti
         "category_sub_cb": 37,    # rodinné domy
         "category_type_cb": 1,    # prodej
+        "usable_area_min": size_min,
+        "usable_area_max": size_max,
         "per_page": count,
-        "sort": 0,                # doporučené
+        "sort": 0,
     }
-    if district_id:
-        params["locality_district_id"] = district_id
+    if lat and lon:
+        params["locality_gps_lat"] = round(lat, 6)
+        params["locality_gps_lon"] = round(lon, 6)
+        params["locality_gps_radius"] = radius_km
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Accept": "application/json",
+        "Referer": "https://www.sreality.cz/",
     }
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "https://www.sreality.cz/api/cs/v2/estates",
-                params=params,
-                headers=headers,
-            )
+            resp = await client.get("https://www.sreality.cz/api/cs/v2/estates",
+                                    params=params, headers=headers)
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
@@ -136,24 +162,25 @@ async def _fetch_sreality_samples(district_id: int | None, count: int = 5) -> li
         seo = e.get("seo", {})
         hash_id = e.get("hash_id")
         locality_slug = seo.get("locality", "")
-        zdroj_url = f"https://www.sreality.cz/detail/prodej/dum/rodinny/{locality_slug}/{hash_id}" if hash_id else None
+        zdroj_url = (
+            f"https://www.sreality.cz/detail/prodej/dum/rodinny/{locality_slug}/{hash_id}"
+            if hash_id else None
+        )
 
         images = e.get("_links", {}).get("images", [])
-        obrazek_url = images[0].get("href") if images else None
-        if obrazek_url:
-            obrazek_url = re.sub(r"fl=res,\d+,\d+", "fl=res,800,600", obrazek_url)
+        raw_img = images[0].get("href") if images else None
+        # Větší rozlišení
+        obrazek_url = re.sub(r"fl=res,\d+,\d+", "fl=res,800,600", raw_img) if raw_img else None
 
-        # Plocha domu a pozemku z názvu: "Prodej rodinného domu 140 m², pozemek 600 m²"
         name = e.get("name", "")
         m2_matches = re.findall(r"(\d+)\s*m²", name)
-        size_m2 = int(m2_matches[0]) if m2_matches else None
-        land_m2 = int(m2_matches[1]) if len(m2_matches) > 1 else None
+        size_m2 = int(m2_matches[0]) if m2_matches else floor_area_m2
+        land_m2 = int(m2_matches[1]) if len(m2_matches) > 1 else 0
 
-        # Lidsky čitelná adresa ze seo.locality slugu: "oslavany-oslavany-hlavni" → "Oslavany, Hlavní"
+        # Lidsky čitelná adresa ze seo.locality slugu
         def slug_to_address(slug: str) -> str:
             parts = [p for p in slug.split("-") if p]
-            # Odstraň duplikáty po sobě jdoucí (např. "oslavany", "oslavany")
-            unique = []
+            unique: list[str] = []
             for p in parts:
                 if not unique or p != unique[-1]:
                     unique.append(p)
@@ -162,15 +189,15 @@ async def _fetch_sreality_samples(district_id: int | None, count: int = 5) -> li
         adresa = slug_to_address(locality_slug) if locality_slug else name
 
         price = e.get("price_czk", {}).get("value_raw", 0) or 0
-        if price <= 1:   # cena na vyžádání
+        if price <= 1:
             continue
 
         results.append({
             "id": i,
             "adresa": adresa,
             "cena_czk": price,
-            "velikost_domu_m2": size_m2 or 120,
-            "velikost_pozemku_m2": land_m2 or 0,
+            "velikost_domu_m2": size_m2,
+            "velikost_pozemku_m2": land_m2,
             "zdroj_url": zdroj_url,
             "obrazek_url": obrazek_url,
         })
@@ -214,15 +241,25 @@ class OdhadceAgent(BaseAgent):
         condition = overrides.get("stav") or condition
         land_area = overrides.get("pozemek") or prop_data.get("plocha_pozemku") or "Neznámá"
 
-        # ── Načti reálné vzorky ze sreality ──────────────────────────────────
-        self.log("Načítám reálné inzeráty ze sreality.cz...", "thinking")
-        district_id = _guess_district_id(address)
-        raw_samples = await _fetch_sreality_samples(district_id, count=5)
+        # ── Načti reálné vzorky ze sreality (GPS + velikost) ─────────────────
+        self.log("Geokuduji adresu nemovitosti...", "thinking")
+        floor_area_int = int(re.sub(r"[^0-9]", "", str(floor_area)) or "120") or 120
+        coords = await _geocode_address(address)
 
-        # Fallback: pokud nenajde nic v okresu, zkus celou ČR
-        if not raw_samples:
-            self.log("Žádné inzeráty v okrese, zkouším celou ČR...", "info")
-            raw_samples = await _fetch_sreality_samples(None, count=5)
+        raw_samples: list[dict] = []
+        if coords:
+            lat, lon = coords
+            # Progresivní rozšiřování okruhu
+            for radius in (5, 15, 30):
+                self.log(f"Hledám RD do {radius} km od {address}...", "thinking")
+                raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=5)
+                if len(raw_samples) >= 3:
+                    break
+        
+        # Fallback bez GPS – celá ČR s filtrem velikosti
+        if len(raw_samples) < 3:
+            self.log("Rozšiřuji hledání na celou ČR (filtr velikosti)...", "info")
+            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, count=5)
 
         if not raw_samples:
             return AgentResult(
@@ -279,9 +316,13 @@ class OdhadceAgent(BaseAgent):
 
             # ── Merge koeficientů od AI zpět do reálných vzorků ──────────────
             ai_vzorky_by_id = {v["id"]: v for v in result_json.get("vzorky", [])}
+            import os
+            backend_url = os.getenv("BACKEND_URL", "https://validace-rd-backend.onrender.com")
             merged_vzorky = []
             for s in raw_samples:
                 ai = ai_vzorky_by_id.get(s["id"], {})
+                raw_img = s["obrazek_url"]
+                proxy_img = f"{backend_url}/api/proxy-image?url={raw_img}" if raw_img else None
                 merged_vzorky.append({
                     "id": s["id"],
                     "adresa": s["adresa"],
@@ -290,7 +331,7 @@ class OdhadceAgent(BaseAgent):
                     "velikost_pozemku_m2": s.get("velikost_pozemku_m2", 0),
                     "stav": s.get("stav", ""),
                     "zdroj_url": s["zdroj_url"],
-                    "obrazek_url": s["obrazek_url"],
+                    "obrazek_url": proxy_img,
                     "koeficienty": ai.get("koeficienty", {}),
                     "oduvodneni_koeficientu": ai.get("oduvodneni_koeficientu", ""),
                 })

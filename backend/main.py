@@ -5,7 +5,10 @@ import json
 from typing import Optional
 
 import io
+import base64
+from urllib.parse import unquote
 from pypdf import PdfReader
+import httpx
 
 from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +46,29 @@ global_websockets: dict[str, list[WebSocket]] = {}
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "service": "AI Validation Pipeline"}
+
+
+@app.get("/api/proxy-image")
+async def proxy_image(url: str):
+    """Proxy image from sreality CDN to avoid CORS restrictions in browser."""
+    from fastapi.responses import Response
+    decoded = unquote(url)
+    # Only allow sreality CDN to prevent abuse
+    if "sdn.cz" not in decoded:
+        raise HTTPException(status_code=400, detail="Nepodporovaný zdroj obrázku.")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://www.sreality.cz/",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(decoded, headers=headers)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            return Response(content=resp.content, media_type=content_type,
+                            headers={"Cache-Control": "public, max-age=3600"})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Nelze načíst obrázek: {e}")
 
 
 @app.post("/api/parse-pdf")
