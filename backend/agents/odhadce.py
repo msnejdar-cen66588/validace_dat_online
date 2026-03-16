@@ -16,14 +16,20 @@ from agents.base import BaseAgent, AgentResult, AgentStatus
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 
-# ── Prompt pro Gemini – dostane REÁLNÉ vzorky, přiřadí jen koeficienty ──────
+# ── Prompt pro Gemini – výběr nejpodobnějších + přiřazení koeficientů ───────
 COEFFICIENT_PROMPT = """Jsi expertní bankovní odhadce nemovitostí v ČR.
-Dostaneš parametry oceňované nemovitosti (rodinný dům) a seznam REÁLNÝCH inzerátů ze sreality.cz.
-Tvůj JEDINÝ úkol: ke každému vzorku přiřadit 8 korekčních koeficientů (K1–K8) a vypočítat základní odhad.
+Dostaneš parametry oceňovaného rodinného domu a SEZNAM KANDIDÁTŮ ze sreality.cz.
 
-METODIKA KOEFICIENTŮ (vzorek vs. náš dům):
+KROK 1 – VÝBĚR: Z kandidátů vyber právě 3 (max 5) NEJPODOBNĚJŠÍ vzorky dle:
+- Velikost objektu (m²) – co nejbližší k oceňované nemovitosti
+- Stav nemovitosti – přednost stejnému nebo podobnému stavu
+- Poloha – přednost bližší lokalitě (id s nižším číslem = nalezeno dříve v bližším okruhu)
+Candidáty, kteří jsou nevhodní (příliš velcí/malí, jiný charakter), VYNECH.
+
+KROK 2 – KOEFICIENTY: Ke každému vybranému vzorku přiřaď 8 koeficientů (K1–K8).
+Metodika (vzorek vs. náš dům):
 - K = 1.00 → vlastnost totožná
-- K < 1.00 → vzorek je v dané vlastnosti LEPŠÍ (snižuje upravenou cenu)
+- K < 1.00 → vzorek je LEPŠÍ (snižuje upravenou cenu)
 - K > 1.00 → vzorek je HORŠÍ (zvyšuje upravenou cenu)
 Rozsahy:
 - K1 (Redukce pramene ceny): 0.80–0.90 (standardně 0.85 pro inzerci)
@@ -38,12 +44,12 @@ Rozsahy:
 Vrať POUZE validní JSON (bez Markdown):
 {
   "zakladni_odhad_czk": <číslo>,
-  "duvod_odhadu": "<stručný komentář trhu a metodiky>",
+  "duvod_odhadu": "<stručný komentář: proč tyto vzorky, trh v lokalitě>",
   "vzorky": [
     {
-      "id": <číslo z vstupu>,
+      "id": <id z vstupu – pouze vybrané>,
       "koeficienty": {"k1": 0.85, "k2": 1.00, "k3": 1.00, "k4": 1.00, "k5": 1.00, "k6": 1.00, "k7": 1.00, "k8": 1.00},
-      "oduvodneni_koeficientu": "<stručné zdůvodnění K hodnot>"
+      "oduvodneni_koeficientu": "<zdůvodnění odlišností>"
     }
   ]
 }
@@ -249,17 +255,18 @@ class OdhadceAgent(BaseAgent):
         raw_samples: list[dict] = []
         if coords:
             lat, lon = coords
-            # Progresivní rozšiřování okruhu
-            for radius in (5, 15, 30):
+            # Progresivní rozšiřování okruhu: 2 → 5 → 10 → 15 → 30 km
+            for radius in (2, 5, 10, 15, 30):
                 self.log(f"Hledám RD do {radius} km od {address}...", "thinking")
-                raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=5)
+                # Fetch 10 candidates per pass so Gemini can pick the best 3–5
+                raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=10)
                 if len(raw_samples) >= 3:
                     break
         
         # Fallback bez GPS – celá ČR s filtrem velikosti
         if len(raw_samples) < 3:
             self.log("Rozšiřuji hledání na celou ČR (filtr velikosti)...", "info")
-            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, count=5)
+            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, count=10)
 
         if not raw_samples:
             return AgentResult(
@@ -268,25 +275,31 @@ class OdhadceAgent(BaseAgent):
                 errors=["Sreality API nedostupné nebo žádné inzeráty."]
             )
 
-        self.log(f"Nalezeno {len(raw_samples)} reálných vzorků, přiřazuji koeficienty...", "info")
+        self.log(f"Nalezeno {len(raw_samples)} kandidátů, AI vybírá nejpodobnější a přiřazuje koeficienty...", "info")
 
-        # ── Prompt pro Gemini – jen koeficienty ──────────────────────────────
+        # ── Prompt pro Gemini – výběr + koeficienty ──────────────────────────
         vzorky_text = json.dumps(
-            [{"id": s["id"], "adresa": s["adresa"], "cena_czk": s["cena_czk"],
-              "velikost_domu_m2": s["velikost_domu_m2"]} for s in raw_samples],
+            [{
+                "id": s["id"],
+                "adresa": s["adresa"],
+                "cena_czk": s["cena_czk"],
+                "velikost_domu_m2": s["velikost_domu_m2"],
+                "velikost_pozemku_m2": s["velikost_pozemku_m2"],
+            } for s in raw_samples],
             ensure_ascii=False, indent=2
         )
 
         prompt_text = (
-            f"Parametry oceňованého rodinného domu:\n"
+            f"Parametry oceňovaného rodinného domu:\n"
             f"- Adresa: {address}\n"
             f"- Podlahová/Užitná plocha: {floor_area} m²\n"
             f"- Plocha pozemku: {land_area} m²\n"
             f"- Stav: {condition}\n"
             f"- Střecha: {roof}\n"
             f"- Vytápění: {heating}\n\n"
-            f"Reálné vzorky ze sreality.cz (v okolí):\n{vzorky_text}\n\n"
-            f"Přiřaď K1–K8 každému vzorku a vypočítej zakladni_odhad_czk. "
+            f"Kandidáti ze sreality.cz (seřazeni od nejbližší lokality):\n{vzorky_text}\n\n"
+            f"Vyber 3–5 NEJPODOBNĚJŠÍCH kandidátů (dle velikosti, stavu a polohy), "
+            f"přiřaď jim K1–K8 a vypočítej zakladni_odhad_czk. "
             f"Vrať POUZE čistý JSON dle instrukce."
         )
 
@@ -312,14 +325,41 @@ class OdhadceAgent(BaseAgent):
 
             result_json = json.loads(raw_text)
             zakladni_odhad = result_json.get("zakladni_odhad_czk", 0)
+
+            # ── Fallback: pokud AI vynechala odhad, spočítáme ho matematicky ─
+            if not zakladni_odhad:
+                total_jc = 0
+                count_ok = 0
+                for v in result_json.get("vzorky", []):
+                    sid = v.get("id")
+                    src = next((s for s in raw_samples if s["id"] == sid), None)
+                    if not src or not src["cena_czk"]:
+                        continue
+                    io = 1.0
+                    for k, kv in (v.get("koeficienty") or {}).items():
+                        try:
+                            num = float(str(kv).replace(",", "."))
+                            io *= max(0.55, min(num, 1.45))
+                        except (ValueError, TypeError):
+                            pass
+                    area = max(src["velikost_domu_m2"] or floor_area_int, 10)
+                    total_jc += (src["cena_czk"] / area) * io
+                    count_ok += 1
+                if count_ok:
+                    zakladni_odhad = round((total_jc / count_ok) * floor_area_int)
+
             odhad_m = zakladni_odhad / 1_000_000
 
             # ── Merge koeficientů od AI zpět do reálných vzorků ──────────────
+            # Only keep the samples that Gemini selected (by id)
             ai_vzorky_by_id = {v["id"]: v for v in result_json.get("vzorky", [])}
+            selected_ids = set(ai_vzorky_by_id.keys())
             import os
             backend_url = os.getenv("BACKEND_URL", "https://validace-rd-backend.onrender.com")
             merged_vzorky = []
             for s in raw_samples:
+                if s["id"] not in selected_ids:
+                    continue  # AI tenhle kandidát nevybrala
                 ai = ai_vzorky_by_id.get(s["id"], {})
                 raw_img = s["obrazek_url"]
                 proxy_img = f"{backend_url}/api/proxy-image?url={raw_img}" if raw_img else None
