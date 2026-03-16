@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, UPLOAD_DIR
+from google.genai import types
 from lv_parser import parse_lv, LVData
 
 CUZK_WMS_ORTOFOTO = "https://ags.cuzk.gov.cz/arcgis1/services/ORTOFOTO/MapServer/WMSServer"

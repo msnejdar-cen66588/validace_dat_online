@@ -117,7 +117,10 @@ class LLMClient:
             "Content-Type": "application/json"
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # Handle SSL verification (often needed in corporate VPN environments)
+        verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
+
+        async with httpx.AsyncClient(timeout=60.0, verify=verify_ssl) as client:
             response = await client.post(
                 f"{self.openai_base_url.rstrip('/')}/chat/completions",
                 headers=headers,

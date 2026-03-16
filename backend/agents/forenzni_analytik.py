@@ -14,6 +14,7 @@ from config import (
     MANIPULATION_SCORE_THRESHOLD, CONFIDENCE_THRESHOLD,
     GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_CREDENTIALS_JSON, BLOCKED_DOMAINS
 )
+from google.genai import types
 
 FORENSIC_SYSTEM_PROMPT = """Jsi forenzní expert na analýzu fotografií nemovitostí. Tvým úkolem je detekovat jakékoliv manipulace, AI úpravy, retuše nebo nesrovnalosti.
 

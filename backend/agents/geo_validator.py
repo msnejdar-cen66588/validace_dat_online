@@ -17,6 +17,7 @@ import httpx
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, MAPY_CZ_API_KEY, UPLOAD_DIR
+from google.genai import types
 
 # Max distance in meters before a photo is flagged
 DISTANCE_THRESHOLD_WARN = 500   # 500 m warning

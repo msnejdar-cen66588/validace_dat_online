@@ -7,6 +7,7 @@ import json
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
+from google.genai import types
 
 COMPARATOR_SYSTEM_PROMPT = """Jsi expert na validaci nemovitostí. Tvým úkolem je porovnat údaje z formuláře
 ocenění rodinného domu s přiloženou fotodokumentací.
