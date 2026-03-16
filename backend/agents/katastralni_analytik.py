@@ -12,10 +12,8 @@ import os
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 
-from google import genai
-from google.genai import types
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, UPLOAD_DIR
 from lv_parser import parse_lv, LVData
 
@@ -116,13 +114,14 @@ ODPOVÍDEJ ČESKY, POUZE V JSON:
 class KatastralniAnalytikAgent(BaseAgent):
     """Agent 7: KatastralniAnalytik – LV + ortofoto analysis."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="KatastralniAnalytik",
             description="Analýza listu vlastnictví – rizika pro banku + ortofoto kontrola staveb",
             system_prompt=LV_RISK_ANALYSIS_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
 
     async def run(self, context: dict) -> AgentResult:
         lv_pdf_path = context.get("lv_pdf_path")
@@ -271,16 +270,13 @@ class KatastralniAnalytikAgent(BaseAgent):
         try:
             lv_summary = json.dumps(lv_data.to_dict(), ensure_ascii=False, indent=2)
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=LV_RISK_ANALYSIS_PROMPT,
                 contents=f"Analyzuj tento List vlastnictví a identifikuj rizika pro banku:\n\n{lv_summary}",
-                config=types.GenerateContentConfig(
-                    system_instruction=LV_RISK_ANALYSIS_PROMPT,
-                    response_mime_type="application/json",
-                    max_output_tokens=3000,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=3000,
             )
-            result = json.loads(response.text)
+            result = json.loads(response_text)
             self.log(f"LV rizika: {result.get('overall_risk_level', '?')}")
             return result
         except Exception as e:
@@ -564,17 +560,14 @@ class KatastralniAnalytikAgent(BaseAgent):
                 f"Analyzuj ortofoto a hledej stavby, které NEJSOU v LV zapsány.",
             ]
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=ORTOFOTO_ANALYSIS_PROMPT,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=ORTOFOTO_ANALYSIS_PROMPT,
-                    response_mime_type="application/json",
-                    max_output_tokens=2000,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=2000,
             )
 
-            result = json.loads(response.text)
+            result = json.loads(response_text)
             detected = result.get("buildings_detected", [])
             self.log(f"Ortofoto analýza: {len(detected)} nezakreslených staveb detekováno")
             return result

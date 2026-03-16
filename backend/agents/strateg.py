@@ -7,10 +7,8 @@ Final decision-maker:
 - Generates human-readable report via Gemini
 """
 import json
-from google import genai
-from google.genai import types
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL
 )
@@ -41,13 +39,14 @@ Vrať POUZE text reportu, bez markdownu ani JSON.
 class StrategAgent(BaseAgent):
     """Agent 5: Strateg - final aggregation and routing decision."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="Strateg",
             description="Agregační logika a finální rozhodnutí (Semafor)",
             system_prompt=REPORT_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
 
     async def run(self, context: dict) -> AgentResult:
         agent_results = context.get("agent_results", {})
@@ -209,16 +208,13 @@ class StrategAgent(BaseAgent):
                 },
             }, ensure_ascii=False, indent=2)
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=self.system_prompt,
                 contents=f"Napiš stručný report na základě těchto dat:\n\n{data_context}",
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    max_output_tokens=1500,
-                ),
+                max_output_tokens=1500,
             )
 
-            report = response.text.strip()
+            report = response_text.strip()
             self.log("Report vygenerován.")
             return report
 

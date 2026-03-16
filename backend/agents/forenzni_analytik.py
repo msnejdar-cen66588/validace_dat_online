@@ -7,13 +7,8 @@ Detects AI edits, retouching, and metadata inconsistencies:
 """
 import json
 import asyncio
-from google import genai
-from google.genai import types
-from google.cloud import vision
-
-from google.oauth2 import service_account
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     MANIPULATION_SCORE_THRESHOLD, CONFIDENCE_THRESHOLD,
@@ -66,13 +61,14 @@ Odpověz POUZE validním JSON.
 class ForenzniAnalytikAgent(BaseAgent):
     """Agent 2: ForenzniAnalytik - detects manipulation and AI edits."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="ForenzniAnalytik",
             description="Detekce AI úprav a manipulací (BR-G5)",
             system_prompt=FORENSIC_SYSTEM_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
         self.vision_client = None
         
         try:
@@ -176,18 +172,14 @@ class ForenzniAnalytikAgent(BaseAgent):
                 parts.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
                 parts.append(f"Photo ID: {img['id']}")
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=self.system_prompt,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    response_mime_type="application/json",
-                    max_output_tokens=3000,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=3000,
             )
 
-            result_text = response.text
-            ai_result = json.loads(result_text)
+            ai_result = json.loads(response_text)
             self.log("ForenzniAnalytik analysis received.", "info")
 
             # Parse results

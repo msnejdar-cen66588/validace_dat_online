@@ -68,6 +68,8 @@ export default function Home() {
   const [lvData, setLvData] = useState<LVData | null>(null);
   const [lvParsing, setLvParsing] = useState(false);
   const [selectedParcels, setSelectedParcels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>("gemini");
+  const [pipelineStarted, setPipelineStarted] = useState(false);
   const lvInputRef = useRef<HTMLInputElement>(null);
 
   const ws = useWebSocket(sessionId);
@@ -208,7 +210,7 @@ export default function Home() {
   const handleStartPipeline = async () => {
     if (!sessionId) return;
     // Fire-and-forget: let WebSocket drive the UI updates in real-time
-    startPipeline(sessionId)
+    startPipeline(sessionId, selectedModel)
       .then((result) => {
         // Fallback: if WS didn't deliver the result, use HTTP response (but only if it's the full result with agents)
         if (!ws.pipelineResult && result.agents) {
@@ -240,6 +242,39 @@ export default function Home() {
     setStep('results');
     setPipelineResult(finalResult);
   }
+
+  const renderModelSelection = () => (
+    <div className="bg-white/50 backdrop-blur-sm p-6 rounded-2xl border border-blue-100 shadow-sm mb-8">
+        <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+            <span className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center text-sm">AI</span>
+            Výběr AI modelu
+        </h3>
+        <div className="grid grid-cols-2 gap-4">
+            <button
+                onClick={() => setSelectedModel("gemini")}
+                className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
+                    selectedModel === "gemini"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 shadow-md"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-blue-200"
+                }`}
+            >
+                <span className="font-bold text-lg">Google Gemini</span>
+                <span className="text-xs opacity-70">Výchozí stabilní model</span>
+            </button>
+            <button
+                onClick={() => setSelectedModel("gpt-5")}
+                className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
+                    selectedModel !== "gemini"
+                        ? "border-blue-600 bg-blue-50 text-blue-700 shadow-md"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-blue-200"
+                }`}
+            >
+                <span className="font-bold text-lg">OpenAI GPT-5</span>
+                <span className="text-xs opacity-70">Experimentální rychlý model</span>
+            </button>
+        </div>
+    </div>
+  );
 
   return (
     <main className={styles.main}>
@@ -295,14 +330,18 @@ export default function Home() {
 
       {showAppInfo && <AppInfo onClose={() => setShowAppInfo(false)} />}
 
-      {/* Upload Step */}
-      {step === 'upload' && (
-        <section className={styles.uploadSection}>
-          <div className={styles.uploadContainer}>
-            <h2 className={styles.sectionTitle}>
-              <span className={styles.titleGradient}>Nahrajte fotografie</span>
-              <span className={styles.titleSub}>rodinného domu</span>
-            </h2>
+      <div className={styles.container}>
+        {/* Upload Step */}
+        {step === 'upload' && (
+          <section className={styles.uploadSection}>
+            <div className={styles.uploadContainer}>
+              <h2 className={styles.sectionTitle}>
+                <span className={styles.titleGradient}>Nahrajte fotografie</span>
+                <span className={styles.titleSub}>rodinného domu</span>
+              </h2>
+
+              {/* AI Model Selection */}
+              {renderModelSelection()}
 
             {/* Photo Drop Zone */}
             <div
@@ -782,7 +821,8 @@ export default function Home() {
             setManualData({ ...EMPTY_PROPERTY_DATA });
           }}
         />
-      )}
+        )}
+      </div>
     </main>
   );
 }

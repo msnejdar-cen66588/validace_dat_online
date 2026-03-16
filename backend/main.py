@@ -256,15 +256,16 @@ async def start_pipeline(
     session_id: str,
     background_tasks: BackgroundTasks,
     custom_prompts: Optional[dict] = None,
+    model: str = "gemini"
 ):
-    """Start the validation pipeline for a session."""
+    """Starts the validation pipeline in the background."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found.")
 
     session = sessions[session_id]
 
     # Create orchestrator
-    orchestrator = PipelineOrchestrator(session_id)
+    orchestrator = PipelineOrchestrator(session_id, model_name=model)
     orchestrators[session_id] = orchestrator
 
     # Attach any websockets that connected before orchestrator creation

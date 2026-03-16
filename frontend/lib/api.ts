@@ -178,8 +178,8 @@ export async function uploadFiles(
     return res.json();
 }
 
-export async function startPipeline(sessionId: string): Promise<PipelineResult> {
-    const res = await fetch(`${API_BASE}/api/pipeline/start/${sessionId}`, {
+export async function startPipeline(sessionId: string, model: string = "gemini"): Promise<PipelineResult> {
+    const res = await fetch(`${API_BASE}/api/pipeline/start/${sessionId}?model=${model}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
     });
@@ -208,6 +208,20 @@ export async function updateAgentPrompt(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ system_prompt: systemPrompt }),
     });
+}
+
+export async function generateValuation(sessionId: string, model: string = "gemini"): Promise<PipelineResult> {
+    const res = await fetch(`${API_BASE}/api/pipeline/valuation/${sessionId}?model=${model}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Valuation generation failed' }));
+        throw new Error(err.detail || 'Valuation generation failed');
+    }
+
+    return res.json();
 }
 
 export function getWebSocketUrl(sessionId: string): string {

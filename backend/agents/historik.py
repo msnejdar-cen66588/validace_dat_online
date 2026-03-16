@@ -28,11 +28,12 @@ HISTORIAN_SYSTEM_PROMPT = """Jsi expert na hodnocení stáří nemovitostí. Tv�
 class HistorikAgent(BaseAgent):
     """Agent 3: Historik - calculates effective age and category."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="Historik",
             description="Výpočet efektivního věku a kategorie (BR-G6)",
             system_prompt=HISTORIAN_SYSTEM_PROMPT,
+            model_name=model_name
         )
 
     async def run(self, context: dict) -> AgentResult:

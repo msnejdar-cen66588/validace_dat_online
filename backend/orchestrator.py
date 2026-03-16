@@ -21,20 +21,21 @@ from agents.strateg import StrategAgent
 class PipelineOrchestrator:
     """Orchestrates the sequential execution of all validation agents."""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, model_name: str = "gemini"):
         self.session_id = session_id
         self.pipeline_id = str(uuid.uuid4())[:8]
+        self.model_name = model_name
 
         # Initialize agents
         self.agents = {
-            "Strazce": StrazceAgent(),
-            "ForenzniAnalytik": ForenzniAnalytikAgent(),
-            "Historik": HistorikAgent(),
-            "Inspektor": InspektorAgent(),
-            "GeoValidator": GeoValidatorAgent(),
-            "PorovnavacDokumentu": PorovnavacDokumentuAgent(),
-            "KatastralniAnalytik": KatastralniAnalytikAgent(),
-            "Strateg": StrategAgent(),
+            "Strazce": StrazceAgent(model_name=model_name),
+            "ForenzniAnalytik": ForenzniAnalytikAgent(model_name=model_name),
+            "Historik": HistorikAgent(model_name=model_name),
+            "Inspektor": InspektorAgent(model_name=model_name),
+            "GeoValidator": GeoValidatorAgent(model_name=model_name),
+            "PorovnavacDokumentu": PorovnavacDokumentuAgent(model_name=model_name),
+            "KatastralniAnalytik": KatastralniAnalytikAgent(model_name=model_name),
+            "Strateg": StrategAgent(model_name=model_name),
         }
         self.agent_order = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor", "GeoValidator", "PorovnavacDokumentu", "KatastralniAnalytik", "Strateg"]
         self.active_connections: list[WebSocket] = []

@@ -55,10 +55,11 @@ class AgentResult:
 class BaseAgent(ABC):
     """Abstract base class for all validation agents."""
 
-    def __init__(self, name: str, description: str, system_prompt: str):
+    def __init__(self, name: str, description: str, system_prompt: str, model_name: str = "gemini"):
         self.name = name
         self.description = description
         self.system_prompt = system_prompt
+        self.model_name = model_name
         self.status: AgentStatus = AgentStatus.IDLE
         self.logs: list[AgentLog] = []
         self.result: Optional[AgentResult] = None

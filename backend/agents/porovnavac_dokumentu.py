@@ -4,10 +4,8 @@ Sends property data (from PDF or manual input) alongside uploaded photos to Gemi
 which evaluates whether the photos match the declared property characteristics.
 """
 import json
-from google import genai
-from google.genai import types
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 COMPARATOR_SYSTEM_PROMPT = """Jsi expert na validaci nemovitostí. Tvým úkolem je porovnat údaje z formuláře
@@ -106,13 +104,14 @@ Vždy zahrň kontrolu podlahové plochy a počtu podlaží jako PRVNÍ dva body 
 class PorovnavacDokumentuAgent(BaseAgent):
     """Compares declared property data (from PDF/manual input) with photo evidence."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="PorovnavacDokumentu",
             description="Porovnání údajů z formuláře s fotodokumentací",
             system_prompt=COMPARATOR_SYSTEM_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
 
     async def run(self, context: dict) -> AgentResult:
         property_data = context.get("property_data")
@@ -166,19 +165,15 @@ class PorovnavacDokumentuAgent(BaseAgent):
                 except Exception as e:
                     self.log(f"Error reading image {img.get('id', '?')}: {e}", "warn")
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=self.system_prompt,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    response_mime_type="application/json",
-                    max_output_tokens=3000,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=3000,
             )
 
-            result_text = response.text
             self.log("AI porovnání dokončeno.", "info")
-            ai_result = json.loads(result_text)
+            ai_result = json.loads(response_text)
 
             verdict = ai_result.get("verdict", "UNKNOWN")
             confidence = ai_result.get("confidence", 0.0)

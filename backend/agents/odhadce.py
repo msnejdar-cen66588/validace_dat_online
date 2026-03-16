@@ -9,10 +9,8 @@ import json
 import re
 
 import httpx
-from google import genai
-from google.genai import types
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 
@@ -214,13 +212,14 @@ async def _fetch_sreality_samples(
 class OdhadceAgent(BaseAgent):
     """Agent 8: Odhadce – určuje NHZP porovnávací metodou s reálnými vzorky ze sreality.cz."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="Odhadce",
             description="Určuje tržní hodnotu nemovitosti (NHZP) porovnávací metodou – reálné vzorky ze sreality.cz + AI koeficienty.",
             system_prompt=COEFFICIENT_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
 
     async def run(self, context: dict) -> AgentResult:
         self.log("Zahajuji odhad obvyklé tržní ceny (NHZP)...", "info")
@@ -304,18 +303,15 @@ class OdhadceAgent(BaseAgent):
         )
 
         try:
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=self.system_prompt,
                 contents=prompt_text,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    response_mime_type="application/json",
-                    max_output_tokens=1500,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=1500,
             )
 
             # Strip markdown wrapping if present
-            raw_text = response.text.strip()
+            raw_text = response_text.strip()
             for prefix in ("```json", "```"):
                 if raw_text.startswith(prefix):
                     raw_text = raw_text[len(prefix):]

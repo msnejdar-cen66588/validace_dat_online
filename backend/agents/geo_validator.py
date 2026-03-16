@@ -14,10 +14,8 @@ import os
 from datetime import datetime, timedelta
 import httpx
 
-from google import genai
-from google.genai import types
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, MAPY_CZ_API_KEY, UPLOAD_DIR
 
 # Max distance in meters before a photo is flagged
@@ -123,13 +121,14 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 class GeoValidatorAgent(BaseAgent):
     """Agent 6: GeoValidator – GPS + visual panorama comparison."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="GeoValidator",
             description="Ověření GPS lokace fotek vs. adresa nemovitosti + vizuální porovnání s panoramou (Mapy.cz)",
             system_prompt=COMPARISON_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
 
     # ─── Main entry ────────────────────────────────────────────────────
     async def run(self, context: dict) -> AgentResult:
@@ -511,17 +510,14 @@ class GeoValidatorAgent(BaseAgent):
                 except Exception:
                     continue
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=FRONT_PHOTO_SELECTION_PROMPT,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=FRONT_PHOTO_SELECTION_PROMPT,
-                    response_mime_type="application/json",
-                    max_output_tokens=300,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=300,
             )
 
-            result = json.loads(response.text)
+            result = json.loads(response_text)
             selected_id = result.get("photo_id")
             reason = result.get("reason", "")
 
@@ -560,17 +556,14 @@ class GeoValidatorAgent(BaseAgent):
                 "\n\nPorovnej, zda obě fotky ukazují stejnou nemovitost.",
             ]
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=self.system_prompt,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    response_mime_type="application/json",
-                    max_output_tokens=1500,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=1500,
             )
 
-            result = json.loads(response.text)
+            result = json.loads(response_text)
             self.log(f"Vizuální verdikt: {result.get('match_verdict', '?')} "
                      f"(confidence: {result.get('confidence', '?')})")
             return result
@@ -599,17 +592,14 @@ class GeoValidatorAgent(BaseAgent):
                 except Exception:
                     continue
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=SEASON_ESTIMATION_PROMPT,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=SEASON_ESTIMATION_PROMPT,
-                    response_mime_type="application/json",
-                    max_output_tokens=800,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=800,
             )
 
-            return json.loads(response.text)
+            return json.loads(response_text)
 
         except Exception as e:
             self.log(f"Chyba odhadu ročního období: {e}", "warn")

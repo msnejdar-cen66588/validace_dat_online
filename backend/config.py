@@ -8,6 +8,11 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
+# OpenAI (GPT-5 via Shared Gateway)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "f6002230db3b4e0581201a2e0f8ae271")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://dev-be.api.csint.cz/be/v1/aigateway-shared-gpt-5")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5") # Or whatever the internal name is, providing a default
+
 # Mapy.cz
 MAPY_CZ_API_KEY = os.getenv("MAPY_CZ_API_KEY", "")
 

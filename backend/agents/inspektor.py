@@ -6,10 +6,8 @@ Visual analysis of technical condition:
 - Severity classification: Minor, Medium, Severe, Critical
 """
 import json
-from google import genai
-from google.genai import types
-
 from agents.base import BaseAgent, AgentResult, AgentStatus
+from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 
@@ -58,13 +56,14 @@ VRAŤ POUZE VALIDNÍ JSON V TOMTO FORMÁTU:
 class InspektorAgent(BaseAgent):
     """Agent 4: Inspektor - visual defect detection (ANO/NE pro online ocenění)."""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini"):
         super().__init__(
             name="Inspektor",
             description="Rozhodnutí o způsobilosti k online ocenění",
             system_prompt=INSPECTOR_SYSTEM_PROMPT,
+            model_name=model_name
         )
-        self.client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.client = LLMClient(model_name=model_name)
 
     async def run(self, context: dict) -> AgentResult:
         images = context.get("images", [])
@@ -92,18 +91,14 @@ class InspektorAgent(BaseAgent):
                 parts.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
                 parts.append(f"Photo ID: {img['id']}")
 
-            response = await self.client.aio.models.generate_content(
-                model=GEMINI_MODEL,
+            response_text = await self.client.generate_content(
+                system_instruction=self.system_prompt,
                 contents=parts,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    response_mime_type="application/json",
-                    max_output_tokens=1000,
-                ),
+                response_mime_type="application/json",
+                max_output_tokens=1000,
             )
 
-            result_text = response.text
-            ai_result = json.loads(result_text)
+            ai_result = json.loads(response_text)
             self.log("Inspection analysis received.", "info")
 
             verdikt = ai_result.get("verdikt", "NE")
