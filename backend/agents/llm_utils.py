@@ -26,12 +26,16 @@ class LLMClient:
     async def generate_content(
         self,
         system_instruction: str,
-        contents: List[Any],
+        contents: Union[str, List[Any]],
         response_mime_type: str = "text/plain",
         max_output_tokens: int = 2048,
         temperature: float = 0.7
     ) -> str:
         """Generate content from the selected LLM provider."""
+        # Normalize contents to a list
+        if isinstance(contents, str) or not isinstance(contents, list):
+            contents = [contents]
+
         if "gemini" in self.model_name:
             return await self._generate_gemini(
                 system_instruction, contents, response_mime_type, max_output_tokens, temperature
@@ -90,7 +94,13 @@ class LLMClient:
         for part in contents:
             if isinstance(part, str):
                 user_content.append({"type": "text", "text": part})
-            elif hasattr(part, "data") and hasattr(part, "mime_type"): # Gemini Part object
+            elif hasattr(part, "inline_data") and part.inline_data: # Gemini Part object from SDK
+                encoded = base64.b64encode(part.inline_data.data).decode('utf-8')
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{part.inline_data.mime_type};base64,{encoded}"}
+                })
+            elif hasattr(part, "data") and hasattr(part, "mime_type"): # Fallback for other Part-like objects
                 encoded = base64.b64encode(part.data).decode('utf-8')
                 user_content.append({
                     "type": "image_url",
@@ -120,12 +130,19 @@ class LLMClient:
         # Handle SSL verification (often needed in corporate VPN environments)
         verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
 
-        async with httpx.AsyncClient(timeout=60.0, verify=verify_ssl) as client:
-            response = await client.post(
-                f"{self.openai_base_url.rstrip('/')}/chat/completions",
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
+        async with httpx.AsyncClient(timeout=90.0, verify=verify_ssl) as client:
+            url = f"{self.openai_base_url.rstrip('/')}/chat/completions"
+            try:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload
+                )
+                if response.status_code != 200:
+                    print(f"OpenAI Gateway Error: {response.status_code} - {response.text}")
+                response.raise_for_status()
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+            except Exception as e:
+                print(f"LLMClient OpenAI error: {str(e)}")
+                raise
