@@ -519,6 +519,38 @@
     padding: 16px 0 8px;
 }
 
+.downloadBtn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 24px;
+    background: #1e293b;
+    color: white;
+    border: none;
+    border-radius: var(--radius-lg);
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: var(--shadow-md);
+}
+
+.downloadBtn:hover {
+    background: #0f172a;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-lg);
+}
+
+.downloadBtn:active {
+    transform: translateY(0);
+}
+
+.downloadBtn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
 @media (max-width: 640px) {
     .section {
         padding: 16px;

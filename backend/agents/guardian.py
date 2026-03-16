@@ -17,9 +17,12 @@ from config import (
     MIN_TOTAL_PHOTOS, MIN_EXTERIOR_PHOTOS, MIN_INTERIOR_PHOTOS,
 )
 
-GUARDIAN_SYSTEM_PROMPT = """Jsi expert na validaci fotografických sad nemovitostí typu Rodinný dům (RD).
+GUARDIAN_SYSTEM_PROMPT = """Jsi expert na validaci fotografické dokumentace pro účely bankovního online ocenění rodinného domu (RD).
 
-Tvůj úkol je klasifikovat každou fotografii do jedné nebo více kategorií a ověřit úplnost sady.
+Tvůj úkol je:
+1. Klasifikovat každou fotografii do kategorií.
+2. Ověřit ÚPLNOST sady (dostatečný počet, kategorie, zadní/boční pohled).
+3. Posoudit AKTUÁLNOST fotografií – jsou to skutečné aktuální fotografie dané nemovitosti?
 
 KATEGORIE:
 - EXTERIER_PREDNI: Přední pohled na dům (fasáda, vchod)
@@ -34,9 +37,8 @@ KATEGORIE:
 - OKOLÍ: Zahrada, příjezdová cesta, okolí domu
 
 PRAVIDLA:
-1. Jedna fotografie MŮŽE patřit do více kategorií (např. kuchyň s obývákem = INTERIER_KUCHYN + INTERIER_OBYVAK).
-2. Pro každou fotku vrať seznam kategorií, do kterých spadá.
-3. Vrať JSON ve formátu:
+1. Jedna fotografie MŮŽE patřit do více kategorií.
+2. Vrať JSON ve formátu:
 {
   "classifications": [
     {"photo_id": "xxx", "categories": ["EXTERIER_PREDNI"], "description": "Přední pohled na RD..."},
@@ -47,9 +49,18 @@ PRAVIDLA:
     "exterior_count": N,
     "interior_count": N,
     "has_rear_or_side_exterior": true/false,
-    "categories_found": ["EXTERIER_PREDNI", ...]
+    "categories_found": ["EXTERIER_PREDNI", ...],
+    "are_photos_current": true/false,
+    "actuality_note": "<pokud jsou podezřelé, stručně vysvětli proč; jinak 'Fotografie vypadají aktuálně.'>"
   }
 }
+
+AKTUÁLNOST – nastav are_photos_current = false pokud:
+- Fotografie vypadají jako AI-generované (příliš dokonalé, nepřirozené)
+- Jsou evidentně staré (rozlišení 640×480, analogové artefakty)
+- Jsou to záběry z jiné nemovitosti nebo katalogové fotografie
+- Více než polovina fotek neodpovídá žádné standardní kategorii RD
+Pokud fotografie nebudí podezření, nastav are_photos_current = true.
 
 Odpověz POUZE validním JSON.
 """
@@ -119,8 +130,10 @@ class GuardianAgent(BaseAgent):
             exterior_count = summary.get("exterior_count", 0)
             interior_count = summary.get("interior_count", 0)
             has_rear_side = summary.get("has_rear_or_side_exterior", False)
+            are_photos_current = summary.get("are_photos_current", True)
+            actuality_note = summary.get("actuality_note", "")
 
-            self.log(f"Exterior: {exterior_count}, Interior: {interior_count}, Rear/Side: {has_rear_side}")
+            self.log(f"Exterior: {exterior_count}, Interior: {interior_count}, Rear/Side: {has_rear_side}, Aktuální: {are_photos_current}")
 
             # Validate requirements
             warnings = []
@@ -132,6 +145,8 @@ class GuardianAgent(BaseAgent):
                 errors.append(f"Nedostatečný počet interiérových fotek: {interior_count}/{MIN_INTERIOR_PHOTOS}")
             if not has_rear_side:
                 errors.append("BLOKUJÍCÍ: Chybí exteriér zadní nebo boční pohled.")
+            if not are_photos_current:
+                errors.append(f"BLOKUJÍCÍ: Fotodokumentace nevypadá aktuálně. {actuality_note}")
 
             if errors:
                 status = AgentStatus.FAIL
@@ -144,13 +159,15 @@ class GuardianAgent(BaseAgent):
 
             return AgentResult(
                 status=status,
-                summary=f"Sada {total} fotek: Ext={exterior_count}, Int={interior_count}, Zadní/Boční={'ANO' if has_rear_side else 'NE'}",
+                summary=f"Sada {total} fotek: Ext={exterior_count}, Int={interior_count}, Zadní/Boční={'ANO' if has_rear_side else 'NE'}, Aktuální={'ANO' if are_photos_current else 'NE'}",
                 details={
                     "classifications": classifications,
                     "total_photos": total,
                     "exterior_count": exterior_count,
                     "interior_count": interior_count,
                     "has_rear_or_side_exterior": has_rear_side,
+                    "are_photos_current": are_photos_current,
+                    "actuality_note": actuality_note,
                     "categories_found": summary.get("categories_found", []),
                 },
                 warnings=warnings,

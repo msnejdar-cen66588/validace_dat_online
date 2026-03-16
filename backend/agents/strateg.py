@@ -93,7 +93,14 @@ class StrategAgent(BaseAgent):
         # Priority check: Strazce FAIL is blocking
         guardian_fail = guardian and guardian.status == AgentStatus.FAIL
         if guardian_fail:
-            self.log("BLOKUJÍCÍ: Neúplná fotodokumentace", "error")
+            self.log("BLOKUJÍCÍ: Neúplná nebo neaktuální fotodokumentace", "error")
+
+        # Check photo actuality separately
+        photos_not_current = (
+            guardian_fail and
+            guardian.details and
+            not guardian.details.get("are_photos_current", True)
+        )
 
         effective_age = None
         if historian and historian.details.get("effective_age") is not None:
@@ -105,23 +112,40 @@ class StrategAgent(BaseAgent):
             final_category = historian.category
 
         # Critical override from Inspektor
-        if inspector and inspector.status == AgentStatus.FAIL:
+        inspektor_fail = inspector and inspector.status == AgentStatus.FAIL
+        if inspektor_fail:
             final_category = 5
             has_fail = True
             self.log(f"Kritický nález inspektora: {inspector.summary}", "error")
 
-        # Determine semaphore
-        if has_fail or guardian_fail or total_warns >= 3:
+        # ── Semaphore decision tree ────────────────────────────────────────────
+        # Priority: photo completeness/actuality > property condition > general warnings
+        if guardian_fail and photos_not_current:
             semaphore = "VRÁTIT KLIENTOVI"
             semaphore_color = "red"
+            semaphore_reason = "Fotodokumentace není aktuální nebo se zdá být archivní. Vyžádejte od klienta aktuální fotografie nemovitosti."
+        elif guardian_fail:
+            semaphore = "VRÁTIT KLIENTOVI"
+            semaphore_color = "red"
+            semaphore_reason = "Fotodokumentace je neúplná. Chybí povinné záběry (zadní/boční pohled nebo dostatečný počet interiérových fotek)."
+        elif inspektor_fail:
+            semaphore = "VRÁTIT KLIENTOVI"
+            semaphore_color = "red"
+            semaphore_reason = f"Nemovitost není způsobilá pro online ocenění kvůli technickému stavu. {inspector.details.get('duvod', '') if inspector and inspector.details else ''}"
+        elif has_fail or total_warns >= 3:
+            semaphore = "VRÁTIT KLIENTOVI"
+            semaphore_color = "red"
+            semaphore_reason = "Bylo zjištěno příliš mnoho nesrovnalostí. Případ vyžaduje fyzickou prohlídku odhadce."
         elif total_warns >= 1:
             semaphore = "SUPERVISED"
             semaphore_color = "orange"
+            semaphore_reason = "Online ocenění je možné, ale výsledky vyžadují manuální přezkoumání supervizorem."
         else:
             semaphore = "ONLINE"
             semaphore_color = "green"
+            semaphore_reason = "Nemovitost splňuje všechna kritéria pro plně automatizované online ocenění."
 
-        self.log(f"Verdikt: {semaphore} | Kategorie: {final_category}")
+        self.log(f"Verdikt: {semaphore} | Kategorie: {final_category} | Důvod: {semaphore_reason[:80]}")
 
         # Generate human-readable report via Gemini
         human_report = await self._generate_report(
@@ -141,6 +165,7 @@ class StrategAgent(BaseAgent):
             details={
                 "semaphore": semaphore,
                 "semaphore_color": semaphore_color,
+                "semaphore_reason": semaphore_reason,
                 "final_category": final_category,
                 "total_warnings": total_warns,
                 "has_fail": has_fail,

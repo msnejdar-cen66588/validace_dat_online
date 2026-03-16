@@ -29,6 +29,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     const [valError, setValError] = useState('');
     const [customCoeffs, setCustomCoeffs] = useState<Record<number, Record<string, string>>>({});
     const [setupData, setSetupData] = useState({ adresa: '', plocha: '', pozemek: '', stav: '' });
+    const [isDownloading, setIsDownloading] = useState(false);
 
     const openSetup = () => {
         const pData = result.property_data || {} as any;
@@ -150,6 +151,36 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
         }
     }
 
+    const handleDownloadPdf = async () => {
+        setIsDownloading(true);
+        try {
+            const res = await fetch(`${API_BASE}/api/pipeline/report/${result.session_id}`);
+            if (!res.ok) throw new Error('Stažení PDF selhalo');
+            
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            
+            // Try to get filename from header
+            const contentDisposition = res.headers.get('Content-Disposition');
+            let filename = `${result.property_address || 'odhad'}.pdf`;
+            if (contentDisposition && contentDisposition.includes('filename=')) {
+                filename = contentDisposition.split('filename=')[1].replace(/["']/g, '');
+            }
+            
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        } catch (err: any) {
+            alert('Chyba při stahování PDF: ' + err.message);
+        } finally {
+            setIsDownloading(false);
+        }
+    };
+
     const semaphore = result.semaphore || 'UNKNOWN';
     const semaphoreColor = result.semaphore_color || 'gray';
     const finalCategory = result.final_category;
@@ -225,6 +256,26 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                             </span>
                         </div>
                     )}
+                </div>
+
+                {/* ── PDF Download Action ── */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+                    <button 
+                        className={styles.downloadBtn} 
+                        onClick={handleDownloadPdf}
+                        disabled={isDownloading}
+                    >
+                        {isDownloading ? (
+                            <span className={styles.spinner} style={{ width: '16px', height: '16px', border: '2px solid white', borderTopColor: 'transparent' }} />
+                        ) : (
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                        )}
+                        <span>{isDownloading ? 'Generuji PDF...' : 'Stáhnout PDF report'}</span>
+                    </button>
                 </div>
 
                 {/* ── Valuation Button ── */}

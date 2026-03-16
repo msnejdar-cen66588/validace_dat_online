@@ -20,6 +20,7 @@ from orchestrator import PipelineOrchestrator
 from pdf_parser import parse_pdf
 from lv_parser import parse_lv
 from agents.odhadce import OdhadceAgent
+from report_generator import ReportGenerator
 
 app = FastAPI(
     title="AI Validation Pipeline – Rodinné Domy",
@@ -378,6 +379,46 @@ async def generate_valuation(session_id: str, payload: dict = Body(None)):
         session["valuation"] = result.to_dict()
         
     return result.to_dict()
+
+
+@app.get("/api/pipeline/report/{session_id}")
+async def get_pipeline_report(session_id: str):
+    """Generate and return a PDF report for the session."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    
+    session = sessions[session_id]
+    result = session.get("result")
+    
+    if not result:
+        raise HTTPException(status_code=400, detail="Pipeline results not available yet.")
+    
+    try:
+        from fastapi.responses import Response
+        generator = ReportGenerator()
+        pdf_bytes = generator.generate_valuation_report(session, result)
+        
+        # Determine filename based on address
+        address = session.get("property_address") or "odhad_nemovitosti"
+        # Sanitize filename (remove special chars, spaces to underscores)
+        import re
+        safe_name = re.sub(r'[^\w\s-]', '', address).strip().replace(' ', '_')
+        if not safe_name:
+            safe_name = "report"
+            
+        filename = f"{safe_name}.pdf"
+        
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Chyba při generování PDF: {str(e)}")
 
 
 @app.post("/api/agent/prompt/{session_id}/{agent_name}")
