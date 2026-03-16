@@ -26,7 +26,7 @@ BLOCKED_DOMAINS = ["sreality.cz", "bezrealitky.cz", "idnes.cz"]
 
 # Image Processing
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
-MAX_IMAGE_SIZE_BYTES = 600 * 1024  # 600 KB to prevent Render OOM on large batches
+MAX_IMAGE_SIZE_BYTES = 300 * 1024  # 300 KB to prevent gateway/proxy payload limits
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tiff", ".bmp"}
 SUPPORTED_PDF_EXTENSIONS = {".pdf"}
 OUTPUT_FORMAT = "JPEG"

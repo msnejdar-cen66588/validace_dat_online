@@ -348,7 +348,11 @@ async def get_pipeline_state(session_id: str):
 
 
 @app.post("/api/pipeline/valuation/{session_id}")
-async def generate_valuation(session_id: str, payload: dict = Body(None)):
+async def generate_valuation(
+    session_id: str, 
+    payload: dict = Body(None),
+    model: str = "gemini"
+):
     """Run just the Valuation (Odhadce) agent to get comparative market estimation."""
     session = sessions.get(session_id, {})
     
@@ -372,7 +376,7 @@ async def generate_valuation(session_id: str, payload: dict = Body(None)):
         }
     }
     
-    agent = OdhadceAgent()
+    agent = OdhadceAgent(model_name=model)
     result = await agent.run(context)
     
     # Store result optionally on session if needed

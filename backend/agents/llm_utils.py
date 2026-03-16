@@ -1,5 +1,6 @@
 """Unified LLM client to support both Gemini and OpenAI providers."""
 import json
+import asyncio
 import os
 import base64
 from typing import Optional, List, Any, Union
@@ -84,7 +85,7 @@ class LLMClient:
         max_output_tokens: int,
         temperature: float
     ) -> str:
-        """Call an OpenAI-compatible API gateway."""
+        """Call an OpenAI-compatible API gateway with enhanced robustness."""
         if not self.openai_api_key:
             raise ValueError("OpenAI API key not provided")
 
@@ -107,10 +108,15 @@ class LLMClient:
                     "image_url": {"url": f"data:{part.mime_type};base64,{encoded}"}
                 })
             else:
-                # Fallback or generic handling
                 user_content.append({"type": "text", "text": str(part)})
         
-        messages.append({"role": "user", "content": user_content})
+        # Simplify user content if only one text part is present (more compatible with older gateways)
+        if len(user_content) == 1 and user_content[0]["type"] == "text":
+            user_content_payload = user_content[0]["text"]
+        else:
+            user_content_payload = user_content
+
+        messages.append({"role": "user", "content": user_content_payload})
 
         payload = {
             "model": self.openai_model,
@@ -119,30 +125,51 @@ class LLMClient:
             "temperature": temperature,
         }
         
+        # Only use json_object if explicitly requested AND not using a very old model
+        # For simplicity and maximum compatibility, we'll keep it for application/json
         if response_mime_type == "application/json":
             payload["response_format"] = {"type": "json_object"}
 
+        # Multiple header variations used by various corporate gateways (Azure, APIC, etc.)
         headers = {
             "Authorization": f"Bearer {self.openai_api_key}",
+            "api-key": self.openai_api_key,
+            "Web-Api-Key": self.openai_api_key,
             "Content-Type": "application/json"
         }
 
-        # Handle SSL verification (often needed in corporate VPN environments)
         verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
+        url = f"{self.openai_base_url.rstrip('/')}/chat/completions"
 
-        async with httpx.AsyncClient(timeout=90.0, verify=verify_ssl) as client:
-            url = f"{self.openai_base_url.rstrip('/')}/chat/completions"
-            try:
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    json=payload
-                )
-                if response.status_code != 200:
-                    print(f"OpenAI Gateway Error: {response.status_code} - {response.text}")
-                response.raise_for_status()
-                result = response.json()
-                return result["choices"][0]["message"]["content"]
-            except Exception as e:
-                print(f"LLMClient OpenAI error: {str(e)}")
-                raise
+        # Force HTTP/1.1 as some corporate proxies/VPNs struggle with HTTP/2
+        async with httpx.AsyncClient(timeout=90.0, verify=verify_ssl, http2=False) as client:
+            max_retries = 2
+            last_err = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    if attempt > 0:
+                        print(f"DEBUG: Retrying OpenAI request (attempt {attempt+1})...")
+                        await asyncio.sleep(2)
+
+                    print(f"DEBUG: Calling OpenAI gateway at {url}")
+                    print(f"DEBUG: Model: {self.openai_model}, Payload parts: {len(contents)}")
+                    
+                    response = await client.post(
+                        url,
+                        headers=headers,
+                        json=payload
+                    )
+                    
+                    if response.status_code != 200:
+                        print(f"DEBUG: OpenAI Error {response.status_code}: {response.text}")
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    return result["choices"][0]["message"]["content"]
+                except Exception as e:
+                    print(f"DEBUG: Attempt {attempt+1} failed: {str(e)}")
+                    last_err = e
+            
+            print(f"DEBUG: All {max_retries+1} attempts failed.")
+            raise last_err
