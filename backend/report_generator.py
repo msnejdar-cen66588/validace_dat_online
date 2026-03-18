@@ -76,7 +76,11 @@ class ReportGenerator:
             self.pdf.set_font(self.font_family, "B", 12)
             self.pdf.cell(0, 8, "Tržní odhad (NHZP)", ln=True, fill=True)
             self.pdf.set_font(self.font_family, "B", 14)
-            nhzp = details.get("odhad_czk", 0)
+            nhzp_raw = details.get("odhad_czk", 0)
+            try:
+                nhzp = float(nhzp_raw)
+            except (ValueError, TypeError):
+                nhzp = 0
             self.pdf.cell(0, 10, f"{nhzp:,.0f} Kč".replace(",", " "), ln=True)
             self.pdf.set_font(self.font_family, "", 10)
             self.pdf.multi_cell(0, 5, details.get("duvod", ""))
@@ -89,7 +93,15 @@ class ReportGenerator:
                 self.pdf.cell(0, 7, "Srovnávací vzorky:", ln=True)
                 self.pdf.set_font(self.font_family, "", 9)
                 for s in samples[:3]: # Top 3 samples
-                    self.pdf.cell(0, 5, f"- {s.get('adresa')} | {s.get('cena_czk', 0):,.0f} Kč | {s.get('velikost_domu_m2')} m2".replace(",", " "), ln=True)
+                    try:
+                        cena = float(s.get('cena_czk', 0))
+                    except (ValueError, TypeError):
+                        cena = 0
+                    try:
+                        velikost = float(s.get('velikost_domu_m2') or 0)
+                    except (ValueError, TypeError):
+                        velikost = 0
+                    self.pdf.cell(0, 5, f"- {s.get('adresa')} | {cena:,.0f} Kč | {velikost:,.0f} m2".replace(",", " "), ln=True)
         
         # Human Report (Strateg summary)
         strateg = result.get("agents", {}).get("Strateg", {}).get("result", {})
