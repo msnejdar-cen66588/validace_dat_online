@@ -7,18 +7,15 @@ class ReportGenerator:
         self.pdf = FPDF()
         self.pdf.set_auto_page_break(auto=True, margin=15)
         
-        # Add fonts that support Czech characters if available
-        # Default dejavu paths on many linux systems or common mac paths
-        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-        font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        font_path = os.path.join(os.path.dirname(__file__), "fonts", "Roboto-Regular.ttf")
+        font_bold_path = os.path.join(os.path.dirname(__file__), "fonts", "Roboto-Bold.ttf")
         
         if os.path.exists(font_path):
-            self.pdf.add_font("DejaVu", "", font_path)
+            self.pdf.add_font("Roboto", "", font_path)
             if os.path.exists(font_bold_path):
-                self.pdf.add_font("DejaVu", "B", font_bold_path)
-            self.font_family = "DejaVu"
+                self.pdf.add_font("Roboto", "B", font_bold_path)
+            self.font_family = "Roboto"
         else:
-            # Fallback to standard Helvetica (might have issues with some CZ chars but better than failing)
             self.font_family = "Helvetica"
 
     def generate_valuation_report(self, session_data: dict, result: dict) -> bytes:
