@@ -167,8 +167,8 @@ class ImagePreprocessor:
         self.session_dir = os.path.join(UPLOAD_DIR, session_id)
         os.makedirs(self.session_dir, exist_ok=True)
 
-    def _process_file_sync(self, filename: str, file_bytes: bytes) -> ProcessedImage:
-        """Synchronous CPU-bound image processing."""
+    async def process_file(self, filename: str, file_bytes: bytes) -> ProcessedImage:
+        """Process a single uploaded image file."""
         img = Image.open(io.BytesIO(file_bytes))
         metadata = _extract_metadata(img, file_bytes)
 
@@ -207,14 +207,10 @@ class ImagePreprocessor:
             size_bytes=len(compressed_data),
         )
 
-    async def process_file(self, filename: str, file_bytes: bytes) -> ProcessedImage:
-        """Process a single uploaded image file asynchronously using a thread pool."""
-        import asyncio
-        return await asyncio.to_thread(self._process_file_sync, filename, file_bytes)
-
     async def process_batch(self, files: list[tuple[str, bytes]]) -> list[ProcessedImage]:
-        """Process multiple image files in parallel."""
-        import asyncio
-        tasks = [self.process_file(filename, file_bytes) for filename, file_bytes in files]
-        return list(await asyncio.gather(*tasks))
-
+        """Process multiple image files."""
+        results = []
+        for filename, file_bytes in files:
+            result = await self.process_file(filename, file_bytes)
+            results.append(result)
+        return results

@@ -153,7 +153,7 @@ async def upload_files(
                 f.write(lv_bytes)
             # Parse LV for preview
             try:
-                lv_parsed = await asyncio.to_thread(parse_lv, lv_bytes)
+                lv_parsed = parse_lv(lv_bytes)
                 lv_data_preview = lv_parsed.to_dict()
             except Exception:
                 pass
@@ -177,31 +177,9 @@ async def upload_files(
         if total_area > 0:
             property_data["plocha_pozemku"] = str(total_area)
 
-    # Extract PDF image logic to separate sync function
-    def extract_pdf_images_sync(file_bytes: bytes, filename: str) -> list[tuple[str, bytes]]:
-        extracted = []
-        try:
-            reader = PdfReader(io.BytesIO(file_bytes))
-            for page_num, page in enumerate(reader.pages):
-                for img_index, image_file_object in enumerate(page.images):
-                    image_bytes = image_file_object.data
-                    image_name = image_file_object.name
-                    image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
-                    
-                    normalized_ext = f".{image_ext.lower()}".replace(".jpeg", ".jpg")
-                    if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png", "webp"):
-                        img_filename = f"{filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
-                        extracted.append((img_filename, image_bytes))
-        except Exception:
-            pass
-        return extracted
-
     # === Process image files ===
     valid_files = []
     has_pdf_photos = False
-    
-    # First, read all uploads and separate out PDF tasks
-    pending_pdfs = []
     for f in files:
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
@@ -209,16 +187,25 @@ async def upload_files(
             valid_files.append((f.filename or "unknown", file_bytes))
         elif ext == ".pdf":
             file_bytes = await f.read()
-            pending_pdfs.append((file_bytes, f.filename or "unknown"))
-            
-    # Process PDF image extraction in parallel threads
-    if pending_pdfs:
-        pdf_tasks = [asyncio.to_thread(extract_pdf_images_sync, fb, fn) for fb, fn in pending_pdfs]
-        pdf_results = await asyncio.gather(*pdf_tasks)
-        for extracted in pdf_results:
-            if extracted:
-                valid_files.extend(extracted)
-                has_pdf_photos = True
+            try:
+                # Otevření PDF přes pypdf z bytestreamu
+                reader = PdfReader(io.BytesIO(file_bytes))
+                for page_num, page in enumerate(reader.pages):
+                    for img_index, image_file_object in enumerate(page.images):
+                        image_bytes = image_file_object.data
+                        image_name = image_file_object.name
+                        image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
+                        
+                        # Pro jistotu povolíme i "jpeg" apod. (ext bez tečky)
+                        normalized_ext = f".{image_ext.lower()}".replace(".jpeg", ".jpg")
+                        if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png", "webp"):
+                            img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
+                            valid_files.append((img_filename, image_bytes))
+                            has_pdf_photos = True
+            except Exception:
+                pass  # Při selhání extrakce přeskočit
+        else:
+            pass  # Skip unsupported formats silently
 
     if not valid_files:
         raise HTTPException(status_code=400, detail="No valid image files uploaded.")
