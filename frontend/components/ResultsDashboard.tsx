@@ -205,18 +205,25 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
 
     const photoIds = Object.keys(agents['Strazce']?.result?.details?.classifications || {});
 
-    const renderWithLinks = (text: string) => {
-        if (!text || photoIds.length === 0) return text;
-        // Escape photoIds for regex to be safe
+    const renderWithLinks = (text: string | React.ReactNode) => {
+        if (typeof text !== 'string' || !text) return text;
+        // Záchytná skupina pro 32znakový HEX nebo jedno ze známých uložených ID,
+        // navíc k němu volitelně připojíme případnou příponu nalezenou v textu.
         const escapedIds = photoIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-        const regex = new RegExp(`(${escapedIds.join('|')})`, 'g');
-        const parts = text.split(regex);
+        const knownIdsPattern = escapedIds.length > 0 ? `|${escapedIds.join('|')}` : '';
+        const combinedRegex = new RegExp(`((?:[a-f0-9]{32}${knownIdsPattern})(?:\\.(?:jpg|jpeg|png))?)`, 'gi');
+        
+        const parts = text.split(combinedRegex);
         return parts.map((part, i) => {
-            if (photoIds.includes(part)) {
+            // Protože se dělí přes string s parsováním (capture group), každý lichý prvek
+            // je hledaný shluk zachycený naším Regexem.
+            if (i % 2 !== 0 && part) {
+                // Odstranění přípony z UUID jen pro účely konstrukce adresy backendu
+                const cleanId = part.replace(/\.(jpg|jpeg|png)$/i, '');
                 return (
                     <a
                         key={i}
-                        href={`${API_BASE}/uploads/${result.session_id}/${part}.jpg`}
+                        href={`${API_BASE}/uploads/${result.session_id}/${cleanId}.jpg`}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{ color: '#3b82f6', textDecoration: 'underline', fontWeight: 500 }}
@@ -808,7 +815,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                             const isHeader = /^\d+\.|^\*\*|^Shrnutí|^Fotodokumentace|^Stav|^Věk|^Ověření|^Doporučení/i.test(line.trim());
                             return (
                                 <p key={i} className={isHeader ? styles.reportSection : styles.reportText}>
-                                    {line.replace(/\*\*/g, '')}
+                                    {renderWithLinks(line.replace(/\*\*/g, ''))}
                                 </p>
                             );
                         })}
@@ -841,7 +848,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                 </div>
                                 <h4 className={styles.ovTitle}>{meta.label}</h4>
                                 <p className={styles.ovSummary}>
-                                    {agent.result?.summary || '–'}
+                                    {renderWithLinks(agent.result?.summary || '–')}
                                 </p>
 
                                 {/* Key details per agent */}
