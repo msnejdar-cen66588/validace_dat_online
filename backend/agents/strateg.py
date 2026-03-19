@@ -122,23 +122,19 @@ class StrategAgent(BaseAgent):
         if guardian_fail and photos_not_current:
             semaphore = "VRÁTIT KLIENTOVI"
             semaphore_color = "red"
-            semaphore_reason = "Fotodokumentace není aktuální nebo se zdá být archivní. Vyžádejte od klienta aktuální fotografie nemovitosti."
+            semaphore_reason = "Fotodokumentace není aktuální nebo nemá platný EXIF. Vyžádejte od klienta novou fotodokumentaci."
         elif guardian_fail:
             semaphore = "VRÁTIT KLIENTOVI"
             semaphore_color = "red"
-            semaphore_reason = "Fotodokumentace je neúplná. Chybí povinné záběry (zadní/boční pohled nebo dostatečný počet interiérových fotek)."
-        elif inspektor_fail:
-            semaphore = "VRÁTIT KLIENTOVI"
-            semaphore_color = "red"
-            semaphore_reason = f"Nemovitost není způsobilá pro online ocenění kvůli technickému stavu. {inspector.details.get('duvod', '') if inspector and inspector.details else ''}"
-        elif has_fail or total_warns >= 3:
-            semaphore = "VRÁTIT KLIENTOVI"
-            semaphore_color = "red"
-            semaphore_reason = "Bylo zjištěno příliš mnoho nesrovnalostí. Případ vyžaduje fyzickou prohlídku odhadce."
+            semaphore_reason = "Fotodokumentace je neúplná nebo vykazuje chyby metadat. Tuto nemovitost nelze ocenit online bez správných fotek."
+        elif inspektor_fail or has_fail or total_warns >= 3:
+            semaphore = "SUPERVISED"
+            semaphore_color = "orange"
+            semaphore_reason = "Zjištěny nesrovnalosti nebo technické problémy. Případ vyžaduje manuální přezkoumání supervizorem."
         elif total_warns >= 1:
             semaphore = "SUPERVISED"
             semaphore_color = "orange"
-            semaphore_reason = "Online ocenění je možné, ale výsledky vyžadují manuální přezkoumání supervizorem."
+            semaphore_reason = "Online ocenění je možné, ale výsledky vyžadují manuální přezkoumání supervizorem kvůli drobným varováním."
         else:
             semaphore = "ONLINE"
             semaphore_color = "green"
