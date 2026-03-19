@@ -11,6 +11,7 @@ for RD (rodinný dům) property valuation:
 2) Dokumentace půdorysů (nepovinné, bonus pokud je k dispozici)
 """
 import json
+from datetime import datetime
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
@@ -112,6 +113,39 @@ class StrazceAgent(BaseAgent):
                 summary=f"Nedostatečný počet fotografií: {total} (minimum ~9)",
                 details={"total_photos": total},
                 errors=[f"Počet fotografií ({total}) je příliš nízký pro kompletní dokumentaci RD."],
+            )
+
+        # ── EXIF validation (must be < 3 months old, must exist) ──
+        exif_errors = []
+        now = datetime.now()
+        for img in images:
+            meta = img.get("metadata", {})
+            cap_date_str = meta.get("capture_date")
+            filename = img.get("original_filename", img.get("id", "Neznámý soubor"))
+            
+            if not cap_date_str:
+                exif_errors.append(f"Fotografie '{filename}' neobsahuje EXIF metadata s datem pořízení.")
+                continue
+                
+            try:
+                cap_date_str = cap_date_str.strip()
+                if " " in cap_date_str:
+                    cap_date = datetime.strptime(cap_date_str, "%Y:%m:%d %H:%M:%S")
+                else:
+                    cap_date = datetime.strptime(cap_date_str, "%Y:%m:%d")
+                
+                age_days = (now - cap_date).days
+                if age_days > 90:
+                    exif_errors.append(f"Fotografie '{filename}' je starší než 3 měsíce ({age_days} dní).")
+            except ValueError:
+                exif_errors.append(f"Nepodařilo se přečíst datum u fotografie '{filename}' ({cap_date_str}).")
+
+        if exif_errors:
+            self.log(f"Fotodokumentace nevyhovuje podmínkám stáří a existence EXIF metadat.", "error")
+            return AgentResult(
+                status=AgentStatus.FAIL,
+                summary="Chyba EXIF dat: Chybějící nebo příliš staré fotografie (výsledek: Vrátit klientovi).",
+                errors=exif_errors
             )
 
         self.log("Klasifikuji fotografie pomocí AI...", "thinking")
