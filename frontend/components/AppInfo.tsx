@@ -328,11 +328,7 @@ const TECH_STACK = [
     },
 ];
 
-', 'WebSocket streaming', 'Pillow (image processing)', 'httpx (async HTTP)'] },
-    { category: 'AI / ML', items: ['Google Gemini 2.0 Flash', 'Multi-modal prompty (text + obrázky)', 'Structured JSON output'] },
-    { category: 'Data Sources', items: ['ČÚZK WMS (ortofoto + katastrální mapa)', 'ČÚZK Nahlížení do KN (LV data)', 'Mapy.cz API (geocoding + panorama)'] },
-    { category: 'Hosting', items: ['Vercel (frontend)', 'Render.com (backend)', 'GitHub (CI/CD)'] },
-];
+
 
 export default function AppInfo({ onClose }: { onClose: () => void }) {
     const [expandedAgent, setExpandedAgent] = useState<string | null>(null);

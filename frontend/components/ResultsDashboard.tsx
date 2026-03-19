@@ -172,13 +172,14 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     }
 
 
-    const handleDownloadPdf = () => {
+    const handleDownloadPdf = async () => {
         setIsDownloading(true);
         try {
-            generatePdfReport({
+            await generatePdfReport({
                 result,
                 valuation,
                 adjustedNhzp: adjustedNhzp || undefined,
+                apiBase: API_BASE,
             });
         } catch (err: any) {
             alert('Chyba pri generovani PDF: ' + err.message);

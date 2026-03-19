@@ -13,6 +13,23 @@ interface PdfReportData {
     result: PipelineResult;
     valuation?: any;
     adjustedNhzp?: number;
+    apiBase?: string;
+}
+
+async function fetchImageBase64(url: string): Promise<string | null> {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.warn('PDF image fetch failed', e);
+        return null;
+    }
 }
 
 /**
@@ -38,7 +55,7 @@ function formatCurrency(value: number): string {
     return value.toLocaleString('cs-CZ') + ' Kc';
 }
 
-export function generatePdfReport({ result, valuation, adjustedNhzp }: PdfReportData): void {
+export async function generatePdfReport({ result, valuation, adjustedNhzp, apiBase = '' }: PdfReportData): Promise<void> {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const margin = 15;
@@ -68,30 +85,72 @@ export function generatePdfReport({ result, valuation, adjustedNhzp }: PdfReport
     const pData = result.property_data || {} as any;
     const address = result.property_address || pData.adresa || 'Adresa neuvedena';
 
+    const docAgent = result.agents?.['PorovnavacDokumentu'];
+    const checks = docAgent?.result?.details?.checks || [];
+
     doc.setFillColor(240, 240, 240);
     doc.rect(margin, y - 4, contentWidth, 8, 'F');
     doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    doc.text(sanitize('Zakladni udaje'), margin + 2, y + 1);
+    doc.text(sanitize('Zakladni udaje a porovnani (Klient vs AI)'), margin + 2, y + 1);
     y += 10;
 
-    doc.setFontSize(10);
+    checkPage(10);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Parametr', margin, y);
+    doc.text('Z klienta (Deklarovano)', margin + 45, y);
+    doc.text('Podle AI z fotodokumentace', margin + 115, y);
+    y += 6;
+    doc.line(margin, y - 4, pageWidth - margin, y - 4);
+    y += 4;
+
     doc.setFont('helvetica', 'normal');
+    
+    // Always show address
+    doc.text('Adresa:', margin, y);
+    doc.text(sanitize(address), margin + 45, y);
+    doc.text('-', margin + 115, y);
+    y += 6;
 
-    const infoRows = [
-        ['Adresa:', address],
-        ['Plocha podlahova:', `${pData.celkova_podlahova_plocha || '–'} m2`],
-        ['Plocha pozemku:', `${pData.plocha_pozemku || '–'} m2`],
-        ['Stav objektu:', pData.stav_rodinneho_domu || '–'],
-    ];
+    if (checks.length > 0) {
+        for (const check of checks) {
+            checkPage(10);
+            const fieldText = sanitize(check.field || '');
+            const declaredText = sanitize(String(check.declared || '–'));
+            const observedText = sanitize(String(check.observed || '–'));
+            
+            doc.text(fieldText, margin, y);
+            
+            const declLines = doc.splitTextToSize(declaredText, 65);
+            const obsLines = doc.splitTextToSize(observedText, 65);
+            
+            doc.text(declLines, margin + 45, y);
+            
+            if (check.match === false) {
+                doc.setTextColor(220, 38, 38); // red for mismatch
+            } else if (check.match === true) {
+                doc.setTextColor(22, 163, 74); // green
+            }
+            doc.text(obsLines, margin + 115, y);
+            doc.setTextColor(0, 0, 0); // reset
+            
+            y += Math.max(declLines.length, obsLines.length) * 5 + 3;
+        }
+    } else {
+        const infoRows = [
+            ['Plocha podlahova:', String(pData.celkova_podlahova_plocha || '–'), '–'],
+            ['Plocha pozemku:', String(pData.plocha_pozemku || '–'), '–'],
+            ['Stav objektu:', String(pData.stav_rodinneho_domu || '–'), '–'],
+        ];
 
-    for (const [label, value] of infoRows) {
-        checkPage(7);
-        doc.setFont('helvetica', 'bold');
-        doc.text(sanitize(label), margin, y);
-        doc.setFont('helvetica', 'normal');
-        doc.text(sanitize(String(value)), margin + 42, y);
-        y += 7;
+        for (const [label, val1, val2] of infoRows) {
+            checkPage(7);
+            doc.text(sanitize(label), margin, y);
+            doc.text(sanitize(val1), margin + 45, y);
+            doc.text(sanitize(val2), margin + 115, y);
+            y += 7;
+        }
     }
     y += 5;
 
@@ -197,8 +256,11 @@ export function generatePdfReport({ result, valuation, adjustedNhzp }: PdfReport
     // ── Geo Validator: Visual Comparison ──
     const geoAgent = result.agents?.['GeoValidator'];
     const cmp = geoAgent?.result?.details?.visual_comparison;
+    const panoramaUrl = geoAgent?.result?.details?.panorama_url;
+    const frontPhotoId = geoAgent?.result?.details?.front_photo_id;
+
     if (cmp) {
-        checkPage(20);
+        checkPage(50); // Misto pro minimalne hlavicku a text
         doc.setFillColor(240, 240, 240);
         doc.rect(margin, y - 4, contentWidth, 8, 'F');
         doc.setFontSize(12);
@@ -214,10 +276,45 @@ export function generatePdfReport({ result, valuation, adjustedNhzp }: PdfReport
 
         if (cmp.comparison_text) {
             const lines = doc.splitTextToSize(sanitize(cmp.comparison_text), contentWidth);
-            checkPage(lines.length * 5);
+            checkPage(lines.length * 5 + 40); // pricteme pripadne i misto pro obrazky dopredu
             doc.text(lines, margin, y);
             y += lines.length * 5 + 3;
         }
+
+        // Vlozeni obrazku vedle sebe (Nahrané foto vs Panorama)
+        if (apiBase && (frontPhotoId || panoramaUrl)) {
+            const imgWidth = (contentWidth - 10) / 2;
+            const imgHeight = (imgWidth * 9) / 16; // 16:9 ratio assumption pro rozlozeni
+
+            let highestY = y;
+            
+            if (frontPhotoId) {
+                const frontUrl = `${apiBase}/uploads/${result.session_id}/${frontPhotoId}.jpg`;
+                const frontB64 = await fetchImageBase64(frontUrl);
+                if (frontB64) {
+                    doc.setFontSize(8);
+                    doc.text('Nahrane foto', margin, y);
+                    doc.addImage(frontB64, 'JPEG', margin, y + 2, imgWidth, imgHeight);
+                    highestY = Math.max(highestY, y + 2 + imgHeight);
+                }
+            }
+
+            if (panoramaUrl) {
+                const panoUrl = `${apiBase}${panoramaUrl}`;
+                const panoB64 = await fetchImageBase64(panoUrl);
+                if (panoB64) {
+                    doc.setFontSize(8);
+                    doc.text('Panorama - Mapy.cz', margin + imgWidth + 10, y);
+                    doc.addImage(panoB64, 'JPEG', margin + imgWidth + 10, y + 2, imgWidth, imgHeight);
+                    highestY = Math.max(highestY, y + 2 + imgHeight);
+                }
+            }
+
+            if (highestY > y) {
+                y = highestY + 8;
+            }
+        }
+        
         y += 5;
     }
 
