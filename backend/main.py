@@ -177,14 +177,20 @@ async def upload_files(
         if total_area > 0:
             property_data["plocha_pozemku"] = str(total_area)
 
-    # === Process image files ===
-    valid_files = []
+    # Preprocessor initialization
+    preprocessor = ImagePreprocessor(session_id)
+    processed = []
+
+    # === Process image files incrementally to save memory ===
     has_pdf_photos = False
     for f in files:
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
-            valid_files.append((f.filename or "unknown", file_bytes))
+            # Process immediately instead of keeping in memory
+            result = await preprocessor.process_file(f.filename or "unknown", file_bytes)
+            processed.append(result)
+            del file_bytes  # Help garbage collection
         elif ext == ".pdf":
             file_bytes = await f.read()
             try:
@@ -200,19 +206,21 @@ async def upload_files(
                         normalized_ext = f".{image_ext.lower()}".replace(".jpeg", ".jpg")
                         if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png", "webp"):
                             img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
-                            valid_files.append((img_filename, image_bytes))
+                            
+                            # Process image immediately
+                            result = await preprocessor.process_file(img_filename, image_bytes)
+                            processed.append(result)
                             has_pdf_photos = True
-            except Exception:
+                            del image_bytes  # Help garbage collection
+            except Exception as e:
+                print(f"Error extracting photos from PDF: {e}")
                 pass  # Při selhání extrakce přeskočit
+            del file_bytes
         else:
             pass  # Skip unsupported formats silently
 
-    if not valid_files:
+    if not processed:
         raise HTTPException(status_code=400, detail="No valid image files uploaded.")
-
-    # Preprocess images
-    preprocessor = ImagePreprocessor(session_id)
-    processed = await preprocessor.process_batch(valid_files)
 
     # Use address from PDF data if not explicitly provided
     effective_address = property_address
