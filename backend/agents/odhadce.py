@@ -295,15 +295,20 @@ class OdhadceAgent(BaseAgent):
         raw_samples: list[dict] = []
         if coords:
             lat, lon = coords
-            for radius in (2, 5, 10, 15, 30):
+            for radius in (2, 5):
                 self.log(f"Hledám RD do {radius} km od {address}...", "thinking")
                 raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=10)
                 if len(raw_samples) >= 3:
                     break
 
         if len(raw_samples) < 3:
-            self.log("Rozšiřuji hledání na celou ČR (filtr velikosti)...", "info")
-            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, count=10)
+            msg = "Pro zpracování online ocenění je v okruhu do 5 km od nemovitosti málo srovnatelných vzorků."
+            self.log(msg, "warn")
+            return AgentResult(
+                status=AgentStatus.FAIL,
+                summary=msg,
+                errors=[msg]
+            )
 
         if not raw_samples:
             return AgentResult(
@@ -421,12 +426,20 @@ class OdhadceAgent(BaseAgent):
             if nhzp < 500_000:
                 warnings.append(f"NHZP {nhzp:,.0f} Kč je neobvykle nízká.")
 
-            # Cap at max sample price (after K1 reduction)
-            max_sample_price = max((s["cena_czk"] for s in raw_samples), default=0)
+            # ── Zastropování podle skutečně VYUŽITÝCH vzorků ──────────────────
+            ai_vzorky_by_id = {v["id"]: v for v in result_json.get("vzorky", [])}
+            selected_ids = set(ai_vzorky_by_id.keys())
+            
+            selected_raw = [s for s in raw_samples if s["id"] in selected_ids]
+            if not selected_raw:
+                selected_raw = raw_samples
+
+            # Cap at max sample price (after K1 reduction is implied by 1.15)
+            max_sample_price = max((s["cena_czk"] for s in selected_raw), default=0)
             max_reasonable = int(max_sample_price * 1.15)  # Allow 15% above max sample
             if nhzp > max_reasonable and max_reasonable > 0:
                 warnings.append(
-                    f"NHZP {nhzp:,.0f} Kč překračovala max. cenu vzorku ({max_sample_price:,.0f} Kč). "
+                    f"NHZP {nhzp:,.0f} Kč překračovala max. cenu vybraného vzorku ({max_sample_price:,.0f} Kč). "
                     f"Zastropováno na {max_reasonable:,.0f} Kč."
                 )
                 nhzp = max_reasonable
@@ -434,8 +447,6 @@ class OdhadceAgent(BaseAgent):
             odhad_m = nhzp / 1_000_000
 
             # ── Merge AI coefficients back into real samples ──────────────────
-            ai_vzorky_by_id = {v["id"]: v for v in result_json.get("vzorky", [])}
-            selected_ids = set(ai_vzorky_by_id.keys())
             backend_url = os.getenv("BACKEND_URL", "https://validace-rd-backend.onrender.com")
             merged_vzorky = []
             for s in raw_samples:
