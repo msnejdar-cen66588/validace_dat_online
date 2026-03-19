@@ -251,7 +251,7 @@ async def upload_files(
 
     return {
         "session_id": session_id,
-        "files_uploaded": len(valid_files),
+        "files_uploaded": len(processed),
         "files_processed": len(processed),
         "images": [img.to_dict() for img in processed],
         "property_data": property_data,
