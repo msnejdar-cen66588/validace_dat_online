@@ -82,41 +82,45 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     };
 
     // ── Výpočet NHZP porovnávací metodou ──
-    // 1. Pro každý vzorek: jednotková cena (JC) = cena_vzorku / plocha_vzorku
-    // 2. Index odlišnosti (IO) = K1 × K2 × ... × K8
-    //    - K < 1.0 → vzorek je LEPŠÍ než náš dům → snižuje cenu
-    //    - K > 1.0 → vzorek je HORŠÍ → zvyšuje cenu
-    // 3. Upravená JC = JC × IO
-    // 4. NHZP = průměr(upravené JC) × podlahová plocha našeho domu
+    // Použij AI odhad jako základ, přepočítej pouze pokud uživatel upravil koeficienty.
+    // Vzorec: JC = cena_vzorku / plocha_vzorku; IO = K1 × K2 × ... × K8;
+    //         Upravená JC = JC × IO; NHZP = průměr(Upravené JC) × plocha_našeho_domu
     let adjustedNhzp = 0;
+    const hasCustomCoeffs = Object.keys(customCoeffs).length > 0;
+
     if (valuation?.details?.odhad_czk) {
         adjustedNhzp = valuation.details.odhad_czk;
         const samples = valuation.details.vzorky || [];
 
-        // Podlahová plocha NAŠEHO domu (ne pozemku!)
-        const rawArea = parseFloat(String(setupData.plocha).replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
-        // Sanity check: podlahová plocha RD by neměla přesáhnout 500 m²
+        // Podlahová plocha – přednostně z backendu, fallback na setupData
+        const backendArea = valuation.details.plocha_ocenovaneho || 0;
+        const rawArea = backendArea > 0
+            ? backendArea
+            : (parseFloat(String(setupData.plocha).replace(',', '.').replace(/[^0-9.]/g, '')) || 0);
         const analyzedArea = rawArea > 0 ? Math.min(rawArea, 500) : 0;
 
-        const parseK = (val: any): number => {
+        const parseK = (val: any, key: string): number => {
             const strVal = String(val ?? '1.0');
             let num = parseFloat(strVal.replace(',', '.')) || 1.0;
             // Ochrana proti tomu, když AI vrátí procenta (85 místo 0.85)
             if (num > 5.0) num = num / 100.0;
-            // Koeficient musí být v rozumném rozmezí 0.55 – 1.45
-            return Math.max(0.55, Math.min(num, 1.45));
+            // K1 musí být vždy 0.85 (redukce pramene ceny za inzerci)
+            if (key === 'k1') return Math.max(0.80, Math.min(num, 0.90));
+            // Ostatní koeficienty: rozumný rozsah 0.75 – 1.25
+            return Math.max(0.75, Math.min(num, 1.25));
         };
 
+        // Přepočítej NHZP pokud uživatel upravil koeficienty NEBO vždy (pro konzistenci)
         if (samples.length > 0 && analyzedArea > 0) {
             let totalUpravenaJc = 0;
 
             samples.forEach((s: any) => {
-                const kData = customCoeffs[s.id] || s.koeficienty || {};
+                const kData = hasCustomCoeffs ? (customCoeffs[s.id] || s.koeficienty || {}) : (s.koeficienty || {});
 
                 // Index odlišnosti = součin K1..K8
                 let io = 1.0;
                 ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
-                    io *= parseK(kData[k]);
+                    io *= parseK(kData[k], k);
                 });
 
                 // Jednotková cena vzorku (Kč/m²)
@@ -131,26 +135,42 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
             const avgUpravenaJc = totalUpravenaJc / samples.length;
             const computed = Math.round(avgUpravenaJc * analyzedArea);
 
-            // Sanity check: výsledek by neměl být více než 3× AI odhad
+            // Sanity checks:
+            // 1. Nesmí překročit 1.5× AI odhad
             const aiEstimate = valuation.details.odhad_czk;
-            adjustedNhzp = (aiEstimate > 0 && computed > aiEstimate * 3)
-                ? aiEstimate
-                : computed;
+            // 2. Absolutní strop 25 mil Kč pro běžný RD
+            const maxAbsolute = 25_000_000;
+            // 3. Nesmí překročit max cenu vzorku * 1.15
+            const maxSamplePrice = Math.max(...samples.map((s: any) => s.cena_czk || 0));
+            const maxFromSamples = Math.round(maxSamplePrice * 1.15);
+
+            let finalNhzp = computed;
+            if (aiEstimate > 0 && finalNhzp > aiEstimate * 1.5) {
+                finalNhzp = Math.round(aiEstimate * 1.5);
+            }
+            if (maxFromSamples > 0 && finalNhzp > maxFromSamples) {
+                finalNhzp = maxFromSamples;
+            }
+            if (finalNhzp > maxAbsolute) {
+                finalNhzp = maxAbsolute;
+            }
+            adjustedNhzp = finalNhzp;
 
         } else if (samples.length > 0) {
-            // Fallback bez plochy – průměr cen vzorků × IO
+            // Fallback bez plochy – průměr cen vzorků × IO × K1
             let totalVal = 0;
             samples.forEach((s: any) => {
-                const kData = customCoeffs[s.id] || s.koeficienty || {};
+                const kData = hasCustomCoeffs ? (customCoeffs[s.id] || s.koeficienty || {}) : (s.koeficienty || {});
                 let io = 1.0;
                 ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
-                    io *= parseK(kData[k]);
+                    io *= parseK(kData[k], k);
                 });
                 totalVal += s.cena_czk * io;
             });
             adjustedNhzp = Math.round(totalVal / samples.length);
         }
     }
+
 
     const handleDownloadPdf = () => {
         setIsDownloading(true);
