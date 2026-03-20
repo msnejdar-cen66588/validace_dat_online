@@ -120,8 +120,9 @@ async def upload_files(
     if pdf_file and pdf_file.filename:
         ext = os.path.splitext(pdf_file.filename)[1].lower()
         if ext == ".pdf":
+            import asyncio
             pdf_bytes = await pdf_file.read()
-            parsed = parse_pdf(pdf_bytes)
+            parsed = await asyncio.to_thread(parse_pdf, pdf_bytes)
             if not parsed.is_empty():
                 property_data = parsed.to_dict()
 
@@ -145,6 +146,7 @@ async def upload_files(
     if lv_pdf_file and lv_pdf_file.filename:
         ext = os.path.splitext(lv_pdf_file.filename)[1].lower()
         if ext == ".pdf":
+            import asyncio
             lv_bytes = await lv_pdf_file.read()
             session_dir = os.path.join(UPLOAD_DIR, session_id)
             os.makedirs(session_dir, exist_ok=True)
@@ -153,7 +155,7 @@ async def upload_files(
                 f.write(lv_bytes)
             # Parse LV for preview
             try:
-                lv_parsed = parse_lv(lv_bytes)
+                lv_parsed = await asyncio.to_thread(parse_lv, lv_bytes)
                 lv_data_preview = lv_parsed.to_dict()
             except Exception:
                 pass
@@ -183,18 +185,25 @@ async def upload_files(
 
     # === Process image files incrementally to save memory ===
     has_pdf_photos = False
+    
+    import asyncio
+    upload_sem = asyncio.Semaphore(3)
+
+    async def _process_file_with_sem(filename, fbytes):
+        async with upload_sem:
+            res = await preprocessor.process_file(filename, fbytes)
+            return res
+
+    tasks = []
+
     for f in files:
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
-            # Process immediately instead of keeping in memory
-            result = await preprocessor.process_file(f.filename or "unknown", file_bytes)
-            processed.append(result)
-            del file_bytes  # Help garbage collection
+            tasks.append(_process_file_with_sem(f.filename or "unknown", file_bytes))
         elif ext == ".pdf":
             file_bytes = await f.read()
             try:
-                # Otevření PDF přes pypdf z bytestreamu
                 reader = PdfReader(io.BytesIO(file_bytes))
                 for page_num, page in enumerate(reader.pages):
                     for img_index, image_file_object in enumerate(page.images):
@@ -202,22 +211,20 @@ async def upload_files(
                         image_name = image_file_object.name
                         image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
                         
-                        # Pro jistotu povolíme i "jpeg" apod. (ext bez tečky)
                         normalized_ext = f".{image_ext.lower()}".replace(".jpeg", ".jpg")
                         if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png", "webp"):
                             img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
-                            
-                            # Process image immediately
-                            result = await preprocessor.process_file(img_filename, image_bytes)
-                            processed.append(result)
                             has_pdf_photos = True
-                            del image_bytes  # Help garbage collection
+                            tasks.append(_process_file_with_sem(img_filename, image_bytes))
             except Exception as e:
                 print(f"Error extracting photos from PDF: {e}")
-                pass  # Při selhání extrakce přeskočit
-            del file_bytes
+                pass
         else:
-            pass  # Skip unsupported formats silently
+            pass
+
+    if tasks:
+        processed_results = await asyncio.gather(*tasks)
+        processed.extend(processed_results)
 
     if not processed:
         raise HTTPException(status_code=400, detail="No valid image files uploaded.")

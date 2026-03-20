@@ -89,12 +89,13 @@ class PipelineOrchestrator:
 
         agent_results = {}
 
-        # ── Execution Logic (Render free tier = 512MB RAM) ──
+        # ── Sequential execution (Render free tier = 512MB RAM) ──
+        # Agents run one at a time to minimize memory.
+        # GeoValidator depends on Strazce, Strateg depends on all.
         import gc
-        import asyncio
 
         async def _run_agent(agent_name: str):
-            """Run a single agent."""
+            """Run a single agent sequentially."""
             agent = self.agents[agent_name]
 
             if context.get("custom_prompts", {}).get(agent_name):
@@ -118,58 +119,23 @@ class PipelineOrchestrator:
             self.results[agent_name] = agent.to_dict()
             return result
 
-        # 1. Start with Strazce (fast fail)
-        strazce_result = None
-        try:
-            strazce_result = await _run_agent("Strazce")
-            agent_results["Strazce"] = strazce_result
-        except Exception as e:
-            await self._notify_log("Strazce", f"Agent selhal: {e}", "error")
-            await self._notify_status("Strazce", "fail")
-            self.results["Strazce"] = {
-                "name": "Strazce", "status": "fail",
-                "summary": f"Chyba: {e}", "errors": [str(e)],
-            }
-            strazce_result = AgentResult(status=AgentStatus.FAIL, summary=str(e), errors=[str(e)])
-            agent_results["Strazce"] = strazce_result
-        
-        gc.collect()
-        
-        remaining_agents = []
-        if strazce_result.status == AgentStatus.FAIL:
-            await self._notify_log("Strateg", "Strazce vrátil FAIL. Přeskakuji rozsáhlejší agenty (šetřím paměť pre-Strategem).", "warn")
-            
-            skipped_agents = ["ForenzniAnalytik", "Historik", "Inspektor", "PorovnavacDokumentu", "KatastralniAnalytik", "GeoValidator"]
-            for name in skipped_agents:
-                agent_results[name] = AgentResult(status=AgentStatus.SUCCESS, summary="Přeskočeno (chyba fotodokumentace)")
-                await self._notify_status(name, "success")
-                self.results[name] = {"name": name, "status": "success", "summary": "Přeskočeno (chyba fotodokumentace)"}
-        else:
-            remaining_agents = ["ForenzniAnalytik", "Historik", "Inspektor", "PorovnavacDokumentu", "KatastralniAnalytik", "GeoValidator"]
+        # Run agents one by one
+        run_order = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor",
+                     "PorovnavacDokumentu", "KatastralniAnalytik", "GeoValidator"]
 
-        # 2. Run remaining concurrently with a semaphore of 2 to protect RAM
-        sem = asyncio.Semaphore(2)
-
-        async def _run_agent_with_sem(agent_name: str):
-            async with sem:
-                try:
-                    res = await _run_agent(agent_name)
-                    gc.collect()
-                    return agent_name, res
-                except Exception as e:
-                    await self._notify_log(agent_name, f"Agent selhal: {e}", "error")
-                    await self._notify_status(agent_name, "fail")
-                    self.results[agent_name] = {
-                        "name": agent_name, "status": "fail",
-                        "summary": f"Chyba: {e}", "errors": [str(e)],
-                    }
-                    return agent_name, AgentResult(status=AgentStatus.FAIL, summary=str(e), errors=[str(e)])
-
-        if remaining_agents:
-            tasks = [_run_agent_with_sem(name) for name in remaining_agents]
-            gathered = await asyncio.gather(*tasks)
-            for name, res in gathered:
-                agent_results[name] = res
+        for agent_name in run_order:
+            try:
+                result = await _run_agent(agent_name)
+                agent_results[agent_name] = result
+            except Exception as e:
+                await self._notify_log(agent_name, f"Agent selhal: {e}", "error")
+                await self._notify_status(agent_name, "fail")
+                self.results[agent_name] = {
+                    "name": agent_name, "status": "fail",
+                    "summary": f"Chyba: {e}", "errors": [str(e)],
+                }
+            # Free memory between agent runs
+            gc.collect()
 
         # Run Strateg with all previous results
         strategist = self.agents["Strateg"]

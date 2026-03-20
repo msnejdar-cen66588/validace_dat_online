@@ -141,12 +141,7 @@ class StrazceAgent(BaseAgent):
                 exif_errors.append(f"Nepodařilo se přečíst datum u fotografie '{filename}' ({cap_date_str}).")
 
         if exif_errors:
-            self.log(f"Fotodokumentace nevyhovuje podmínkám stáří a existence EXIF metadat.", "error")
-            return AgentResult(
-                status=AgentStatus.FAIL,
-                summary="Chyba EXIF dat: Chybějící nebo příliš staré fotografie (výsledek: Vrátit klientovi).",
-                errors=exif_errors
-            )
+            self.log(f"Fotodokumentace nevyhovuje EXIF podmínkám, zapisuji upozornění.", "warn")
 
         self.log("Klasifikuji fotografie pomocí AI...", "thinking")
 
@@ -194,6 +189,9 @@ class StrazceAgent(BaseAgent):
             # ── Evaluate completeness ──
             warnings = []
             errors = []
+            
+            if exif_errors:
+                warnings.extend(exif_errors)
 
             # Exterior checks
             if exterior_count < 2:
