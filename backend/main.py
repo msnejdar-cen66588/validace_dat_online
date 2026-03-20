@@ -187,20 +187,27 @@ async def upload_files(
     has_pdf_photos = False
     
     import asyncio
-    upload_sem = asyncio.Semaphore(3)
-
-    async def _process_file_with_sem(filename, fbytes):
-        async with upload_sem:
-            res = await preprocessor.process_file(filename, fbytes)
-            return res
-
+    
     tasks = []
+    
+    # Funkce projede dávku a ošetří přeplnění RAM na free serveru (v jednu chvíli se zpracují kompresí max 3 bitmapy)
+    async def flush_tasks():
+        if tasks:
+            processed_results = await asyncio.gather(*tasks)
+            processed.extend(processed_results)
+            tasks.clear()
+
+    async def _process_file_to_thread(filename, fbytes):
+        res = await preprocessor.process_file(filename, fbytes)
+        return res
 
     for f in files:
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
-            tasks.append(_process_file_with_sem(f.filename or "unknown", file_bytes))
+            tasks.append(_process_file_to_thread(f.filename or "unknown", file_bytes))
+            if len(tasks) >= 3:
+                await flush_tasks()
         elif ext == ".pdf":
             file_bytes = await f.read()
             try:
@@ -215,16 +222,17 @@ async def upload_files(
                         if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png", "webp"):
                             img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
                             has_pdf_photos = True
-                            tasks.append(_process_file_with_sem(img_filename, image_bytes))
+                            tasks.append(_process_file_to_thread(img_filename, image_bytes))
+                            if len(tasks) >= 3:
+                                await flush_tasks()
             except Exception as e:
                 print(f"Error extracting photos from PDF: {e}")
                 pass
         else:
             pass
 
-    if tasks:
-        processed_results = await asyncio.gather(*tasks)
-        processed.extend(processed_results)
+    # Zbylé soubory mimo troj-dávkování
+    await flush_tasks()
 
     if not processed:
         raise HTTPException(status_code=400, detail="No valid image files uploaded.")
