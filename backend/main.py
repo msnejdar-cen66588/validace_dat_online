@@ -215,7 +215,7 @@ async def upload_files(
             if len(file_bytes) > 15_000_000:
                 continue
             tasks.append(_process_file_to_thread(f.filename or "unknown", file_bytes))
-            if len(tasks) >= 2:  # batch of 2 to save RAM on free tier
+            if len(tasks) >= 3:  # batch of 3 OK with downscaling (7MB/img vs 36MB)
                 await flush_tasks()
         elif ext == ".pdf":
             file_bytes = await f.read()

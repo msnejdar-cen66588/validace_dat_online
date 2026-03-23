@@ -462,10 +462,15 @@ class OdhadceAgent(BaseAgent):
                 errors=[msg]
             )
 
-        # ── Stáhni detaily vzorků – sekvenčně pro úsporu RAM na free tier ──
+        # ── Stáhni detaily vzorků – omezená paralelizace (sem=3 pro RAM) ──
         self.log(f"Stahuji detaily {len(raw_samples)} vzorků ze Sreality...", "thinking")
-        for s in raw_samples:
-            if s.get("hash_id"):
+        import asyncio
+        sem_detail = asyncio.Semaphore(3)
+
+        async def _fetch_detail_limited(s):
+            if not s.get("hash_id"):
+                return
+            async with sem_detail:
                 try:
                     detail = await _fetch_sample_detail(s["hash_id"])
                     if isinstance(detail, dict):
@@ -483,13 +488,13 @@ class OdhadceAgent(BaseAgent):
                             s["pocet_podlazi"] = detail["floors"]
                 except Exception:
                     pass
+
+        await asyncio.gather(*[_fetch_detail_limited(s) for s in raw_samples])
+
         # Fallback plochy
         for s in raw_samples:
             if not s["velikost_domu_m2"] or s["velikost_domu_m2"] <= 0:
                 s["velikost_domu_m2"] = floor_area_int
-
-        enriched_count = sum(1 for s in raw_samples if s.get("stav"))
-        self.log(f"Detail stažen: {enriched_count}/{len(raw_samples)} vzorků má strukturovaná data (stav, rok...).", "info")
 
         # ── Příprava fotek oceňované nemovitosti pro AI ──────────────────────
         from google.genai import types as genai_types
@@ -514,23 +519,32 @@ class OdhadceAgent(BaseAgent):
         if photos_sent > 0:
             self.log(f"Odesílám {photos_sent} fotek oceňované nemovitosti k analýze AI...", "info")
 
-        # ── Stáhni fotky vzorků pro AI (sekvenčně, max 3 pro úsporu RAM) ──
+        # ── Stáhni fotky vzorků pro AI (sem=2 pro RAM) ──
         sample_photos_sent = 0
         contents_parts.append("\n=== FOTOGRAFIE VZORKŮ ZE SREALITY ===\n")
+        sem_photo = asyncio.Semaphore(2)
+        photo_results: list[tuple] = []
 
-        for s in raw_samples[:3]:
+        async def _dl_photo(s):
             url = s.get("obrazek_url")
-            if url:
+            if not url:
+                return (s, None)
+            async with sem_photo:
                 try:
-                    photo_data = await _download_image_bytes(url)
-                    if isinstance(photo_data, bytes) and photo_data:
-                        contents_parts.append(f"Fotografie vzorku #{s['id']} ({s['adresa']}):")
-                        contents_parts.append(
-                            genai_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg")
-                        )
-                        sample_photos_sent += 1
+                    data = await _download_image_bytes(url)
+                    return (s, data)
                 except Exception:
-                    pass
+                    return (s, None)
+
+        photo_results = await asyncio.gather(*[_dl_photo(s) for s in raw_samples[:5]])
+
+        for s, photo_data in photo_results:
+            if isinstance(photo_data, bytes) and photo_data:
+                contents_parts.append(f"Fotografie vzorku #{s['id']} ({s['adresa']}):")
+                contents_parts.append(
+                    genai_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg")
+                )
+                sample_photos_sent += 1
 
         if sample_photos_sent > 0:
             self.log(f"Odesílám {sample_photos_sent} fotek vzorků pro vizuální porovnání.", "info")

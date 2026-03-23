@@ -180,6 +180,13 @@ class ImagePreprocessor:
         except Exception:
             pass
 
+        # ⚡ Immediate downscale to max 2000px – cuts RAM from 36MB to ~7MB per image
+        MAX_DIM = 2000
+        if img.width > MAX_DIM or img.height > MAX_DIM:
+            ratio = min(MAX_DIM / img.width, MAX_DIM / img.height)
+            new_size = (int(img.width * ratio), int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
         # Convert and compress
         if img.mode in ("RGBA", "P", "LA"):
             img = img.convert("RGB")
