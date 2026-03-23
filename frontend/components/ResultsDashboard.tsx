@@ -557,6 +557,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                         Dům: {s.velikost_domu_m2} m² | Pozemek: {s.velikost_pozemku_m2} m²
                                                         {s.stav ? ` | ${s.stav}` : ''}
                                                         {s.rok_stavby ? ` | ${s.rok_stavby}` : ''}
+                                                        {s.distance_km != null && ` | ${s.distance_km} km`}
                                                     </div>
                                                 </div>
                                                 <div style={{ textAlign: 'right' }}>

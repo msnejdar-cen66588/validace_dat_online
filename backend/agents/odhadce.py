@@ -207,15 +207,27 @@ async def _geocode_address(address: str) -> tuple[float, float] | None:
     return None
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two GPS points in km using the haversine formula."""
+    R = 6371  # Earth radius in km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+         math.sin(dlon / 2) ** 2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 async def _fetch_sreality_samples(
     lat: float | None,
     lon: float | None,
     floor_area_m2: int,
     radius_km: int = 5,
-    count: int = 12,
+    max_km: int = 10,
+    count: int = 20,
     district_id: int | None = None,
 ) -> list[dict]:
-    """Načte reálné inzeráty RD ze sreality.cz API filtrované GPS a plochou."""
+    """Načte reálné inzeráty RD ze sreality.cz API, filtruje dle GPS vzdálenosti (haversine)."""
 
     # Velikostní rozsah: plocha ±40 % (min 40 m², max 400 m²)
     size_min = max(40, int(floor_area_m2 * 0.6))
@@ -233,7 +245,8 @@ async def _fetch_sreality_samples(
     if lat and lon:
         params["locality_gps_lat"] = round(lat, 6)
         params["locality_gps_lon"] = round(lon, 6)
-        params["locality_gps_radius"] = radius_km
+        # Sreality expects radius in METERS, not km
+        params["locality_gps_radius"] = max_km * 1000
     elif district_id:
         params["locality_district_id"] = district_id
 
@@ -265,7 +278,12 @@ async def _fetch_sreality_samples(
 
         images = e.get("_links", {}).get("images", [])
         raw_img = images[0].get("href") if images else None
-        obrazek_url = re.sub(r"fl=res,\d+,\d+", "fl=res,800,600", raw_img) if raw_img else None
+        if raw_img:
+            # Fix image URL to get a working CDN preview
+            obrazek_url = re.sub(r"fl=res,\d+,\d+", "fl=res,400,300", raw_img)
+            obrazek_url = re.sub(r"/\d+x\d+/", "/400x300/", obrazek_url)
+        else:
+            obrazek_url = None
 
         name = e.get("name", "")
 
@@ -294,6 +312,13 @@ async def _fetch_sreality_samples(
         gps_lat = gps.get("lat")
         gps_lon = gps.get("lon")
 
+        # ── BACKEND DISTANCE FILTER (haversine) – Sreality radius is unreliable ──
+        distance_km = None
+        if lat and lon and gps_lat and gps_lon:
+            distance_km = _haversine_km(lat, lon, gps_lat, gps_lon)
+            if distance_km > max_km:
+                continue  # Skip samples beyond max distance
+
         results.append({
             "id": i,
             "hash_id": hash_id,
@@ -308,8 +333,11 @@ async def _fetch_sreality_samples(
             "zdroj_url": zdroj_url,
             "obrazek_url": obrazek_url,
             "gps": {"lat": gps_lat, "lon": gps_lon} if gps_lat and gps_lon else None,
+            "distance_km": round(distance_km, 1) if distance_km is not None else None,
         })
 
+    # Sort by distance so AI gets closest samples first
+    results.sort(key=lambda x: x.get("distance_km") or 999)
     return results
 
 
@@ -444,14 +472,17 @@ class OdhadceAgent(BaseAgent):
         raw_samples: list[dict] = []
         if coords:
             lat, lon = coords
-            for radius in (2, 5):
+            for radius in (5, 10):
                 self.log(f"Hledám RD do {radius} km od {address}...", "thinking")
-                raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=10)
-                if len(raw_samples) >= 3:
+                raw_samples = await _fetch_sreality_samples(
+                    lat, lon, floor_area_int,
+                    radius_km=radius, max_km=radius, count=20
+                )
+                if len(raw_samples) >= 5:
                     break
         elif district_id:
             self.log(f"Hledám RD v okrese (fallback)...", "thinking")
-            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, district_id=district_id, count=10)
+            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, district_id=district_id, count=20)
 
         if len(raw_samples) < 3:
             msg = "Pro zpracování online ocenění je v okruhu do 5 km od nemovitosti málo srovnatelných vzorků."
@@ -725,6 +756,7 @@ class OdhadceAgent(BaseAgent):
                     "upravena_jc": round(jc * io),
                     "oduvodneni_koeficientu": ai.get("oduvodneni_koeficientu", ""),
                     "gps": s.get("gps"),
+                    "distance_km": s.get("distance_km"),
                 })
 
             self.log(f"Odhad dokončen: {odhad_m:.1f} mil. Kč (rozmezí {nhzp_min/1e6:.1f}–{nhzp_max/1e6:.1f} mil.)", "info")
@@ -826,8 +858,9 @@ class OdhadceAgent(BaseAgent):
         # Use MEDIAN for robustness against outliers
         median_jc = statistics.median(upravene_jc_list)
         nhzp = round(median_jc * floor_area_int)
-        nhzp_min = round(min(upravene_jc_list) * floor_area_int)
-        nhzp_max = round(max(upravene_jc_list) * floor_area_int)
+        # Price range: ±15 % from median (realistic interval, not raw min/max)
+        nhzp_min = round(nhzp * 0.85)
+        nhzp_max = round(nhzp * 1.15)
 
         return {
             "nhzp": nhzp,
