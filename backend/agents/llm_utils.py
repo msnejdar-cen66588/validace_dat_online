@@ -143,19 +143,16 @@ class LLMClient:
         verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
         url = f"{self.openai_base_url.rstrip('/')}/chat/completions"
 
-        # Force HTTP/1.1 as some corporate proxies/VPNs struggle with HTTP/2
-        async with httpx.AsyncClient(timeout=90.0, verify=verify_ssl, http2=False) as client:
-            max_retries = 2
+        async with httpx.AsyncClient(timeout=120.0, verify=verify_ssl, http2=False) as client:
+            max_retries = 4
             last_err = None
             
             for attempt in range(max_retries + 1):
                 try:
                     if attempt > 0:
                         print(f"DEBUG: Retrying OpenAI request (attempt {attempt+1})...")
-                        await asyncio.sleep(2)
 
-                    print(f"DEBUG: Calling OpenAI gateway at {url}")
-                    print(f"DEBUG: Model: {self.openai_model}, Payload parts: {len(contents)}")
+                    print(f"DEBUG: Calling OpenAI at {url} | Model: {self.openai_model}")
                     
                     response = await client.post(
                         url,
@@ -163,15 +160,39 @@ class LLMClient:
                         json=payload
                     )
                     
+                    # Handle 429 rate limit with exponential backoff
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("retry-after")
+                        if retry_after:
+                            wait = min(float(retry_after), 60)
+                        else:
+                            wait = min(5 * (2 ** attempt), 60)  # 5s, 10s, 20s, 40s, 60s
+                        print(f"DEBUG: Rate limited (429), waiting {wait}s before retry...")
+                        await asyncio.sleep(wait)
+                        continue
+                    
                     if response.status_code != 200:
-                        print(f"DEBUG: OpenAI Error {response.status_code}: {response.text}")
+                        print(f"DEBUG: OpenAI Error {response.status_code}: {response.text[:300]}")
                     
                     response.raise_for_status()
                     result = response.json()
                     return result["choices"][0]["message"]["content"]
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429:
+                        # Already handled above, but just in case
+                        wait = min(5 * (2 ** attempt), 60)
+                        print(f"DEBUG: Rate limited (429 exception), waiting {wait}s...")
+                        await asyncio.sleep(wait)
+                        last_err = e
+                    else:
+                        print(f"DEBUG: Attempt {attempt+1} failed: {str(e)}")
+                        last_err = e
+                        break  # Non-rate-limit errors should not retry
                 except Exception as e:
                     print(f"DEBUG: Attempt {attempt+1} failed: {str(e)}")
                     last_err = e
+                    if attempt < max_retries:
+                        await asyncio.sleep(2)
             
             print(f"DEBUG: All {max_retries+1} attempts failed.")
             raise last_err

@@ -136,6 +136,9 @@ class PipelineOrchestrator:
                 }
             # Free memory between agent runs
             gc.collect()
+            # Rate limit delay for OpenAI models (Tier 1 = 3 RPM)
+            if "gemini" not in self.model_name.lower():
+                await asyncio.sleep(3)
 
         # Run Strateg with all previous results
         strategist = self.agents["Strateg"]
