@@ -446,12 +446,12 @@ class OdhadceAgent(BaseAgent):
             lat, lon = coords
             for radius in (2, 5):
                 self.log(f"Hledám RD do {radius} km od {address}...", "thinking")
-                raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=8)
+                raw_samples = await _fetch_sreality_samples(lat, lon, floor_area_int, radius_km=radius, count=10)
                 if len(raw_samples) >= 3:
                     break
         elif district_id:
             self.log(f"Hledám RD v okrese (fallback)...", "thinking")
-            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, district_id=district_id, count=8)
+            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, district_id=district_id, count=10)
 
         if len(raw_samples) < 3:
             msg = "Pro zpracování online ocenění je v okruhu do 5 km od nemovitosti málo srovnatelných vzorků."
@@ -462,40 +462,32 @@ class OdhadceAgent(BaseAgent):
                 errors=[msg]
             )
 
-        # ── Stáhni detaily vzorků (strukturovaná data) ───────────────────────
+        # ── Stáhni detaily vzorků – sekvenčně pro úsporu RAM na free tier ──
         self.log(f"Stahuji detaily {len(raw_samples)} vzorků ze Sreality...", "thinking")
-        import asyncio
-        detail_tasks = []
         for s in raw_samples:
             if s.get("hash_id"):
-                detail_tasks.append(_fetch_sample_detail(s["hash_id"]))
-            else:
-                detail_tasks.append(asyncio.coroutine(lambda: {})())
-
-        details = await asyncio.gather(*detail_tasks, return_exceptions=True)
-
-        for s, detail in zip(raw_samples, details):
-            if isinstance(detail, Exception) or not isinstance(detail, dict):
-                continue
-            # Přepiš data z detailu (strukturovaná → přesná)
-            if detail.get("usable_area") and detail["usable_area"] > 0:
-                s["velikost_domu_m2"] = detail["usable_area"]
-            if detail.get("land_area") and detail["land_area"] > 0:
-                s["velikost_pozemku_m2"] = detail["land_area"]
-            if detail.get("condition"):
-                s["stav"] = detail["condition"]
-            if detail.get("year_built"):
-                s["rok_stavby"] = detail["year_built"]
-            if detail.get("house_type"):
-                s["typ_domu"] = detail["house_type"]
-            if detail.get("floors"):
-                s["pocet_podlazi"] = detail["floors"]
-
-        # Filtruj vzorky bez validní plochy (dosadíme z názvu nebo skipneme)
+                try:
+                    detail = await _fetch_sample_detail(s["hash_id"])
+                    if isinstance(detail, dict):
+                        if detail.get("usable_area") and detail["usable_area"] > 0:
+                            s["velikost_domu_m2"] = detail["usable_area"]
+                        if detail.get("land_area") and detail["land_area"] > 0:
+                            s["velikost_pozemku_m2"] = detail["land_area"]
+                        if detail.get("condition"):
+                            s["stav"] = detail["condition"]
+                        if detail.get("year_built"):
+                            s["rok_stavby"] = detail["year_built"]
+                        if detail.get("house_type"):
+                            s["typ_domu"] = detail["house_type"]
+                        if detail.get("floors"):
+                            s["pocet_podlazi"] = detail["floors"]
+                except Exception:
+                    pass
+        # Fallback plochy
         for s in raw_samples:
             if not s["velikost_domu_m2"] or s["velikost_domu_m2"] <= 0:
-                s["velikost_domu_m2"] = floor_area_int  # fallback
-        
+                s["velikost_domu_m2"] = floor_area_int
+
         enriched_count = sum(1 for s in raw_samples if s.get("stav"))
         self.log(f"Detail stažen: {enriched_count}/{len(raw_samples)} vzorků má strukturovaná data (stav, rok...).", "info")
 
@@ -522,27 +514,23 @@ class OdhadceAgent(BaseAgent):
         if photos_sent > 0:
             self.log(f"Odesílám {photos_sent} fotek oceňované nemovitosti k analýze AI...", "info")
 
-        # ── Stáhni fotky vzorků pro AI ──────────────────────────────────
+        # ── Stáhni fotky vzorků pro AI (sekvenčně, max 3 pro úsporu RAM) ──
         sample_photos_sent = 0
         contents_parts.append("\n=== FOTOGRAFIE VZORKŮ ZE SREALITY ===\n")
-        
-        photo_tasks = []
-        for s in raw_samples[:5]:  # max 5 sample photos
+
+        for s in raw_samples[:3]:
             url = s.get("obrazek_url")
             if url:
-                photo_tasks.append(_download_image_bytes(url))
-            else:
-                photo_tasks.append(asyncio.coroutine(lambda: None)())
-
-        sample_photos = await asyncio.gather(*photo_tasks, return_exceptions=True)
-
-        for s, photo_data in zip(raw_samples[:5], sample_photos):
-            if isinstance(photo_data, bytes) and photo_data:
-                contents_parts.append(f"Fotografie vzorku #{s['id']} ({s['adresa']}):")
-                contents_parts.append(
-                    genai_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg")
-                )
-                sample_photos_sent += 1
+                try:
+                    photo_data = await _download_image_bytes(url)
+                    if isinstance(photo_data, bytes) and photo_data:
+                        contents_parts.append(f"Fotografie vzorku #{s['id']} ({s['adresa']}):")
+                        contents_parts.append(
+                            genai_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg")
+                        )
+                        sample_photos_sent += 1
+                except Exception:
+                    pass
 
         if sample_photos_sent > 0:
             self.log(f"Odesílám {sample_photos_sent} fotek vzorků pro vizuální porovnání.", "info")
