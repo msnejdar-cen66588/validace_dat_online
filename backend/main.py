@@ -2,6 +2,7 @@
 import os
 import uuid
 import json
+import gc
 from typing import Optional
 
 import io
@@ -132,6 +133,8 @@ async def upload_files(
             pdf_path = os.path.join(session_dir, "formular.pdf")
             with open(pdf_path, "wb") as f:
                 f.write(pdf_bytes)
+            del pdf_bytes
+            gc.collect()
 
     # === Handle manual property data (JSON string from frontend) ===
     if not property_data and property_data_json:
@@ -159,6 +162,8 @@ async def upload_files(
                 lv_data_preview = lv_parsed.to_dict()
             except Exception:
                 pass
+            del lv_bytes
+            gc.collect()
 
     # Parse selected parcels
     selected_parcels = None
@@ -196,6 +201,7 @@ async def upload_files(
             processed_results = await asyncio.gather(*tasks)
             processed.extend(processed_results)
             tasks.clear()
+            gc.collect()  # Free PIL memory after each batch
 
     async def _process_file_to_thread(filename, fbytes):
         res = await preprocessor.process_file(filename, fbytes)
@@ -205,15 +211,21 @@ async def upload_files(
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
+            # Skip files > 15MB to prevent OOM on free tier
+            if len(file_bytes) > 15_000_000:
+                continue
             tasks.append(_process_file_to_thread(f.filename or "unknown", file_bytes))
-            if len(tasks) >= 3:
+            if len(tasks) >= 2:  # batch of 2 to save RAM on free tier
                 await flush_tasks()
         elif ext == ".pdf":
             file_bytes = await f.read()
             try:
                 reader = PdfReader(io.BytesIO(file_bytes))
+                pdf_img_count = 0
                 for page_num, page in enumerate(reader.pages):
                     for img_index, image_file_object in enumerate(page.images):
+                        if pdf_img_count >= 4:  # max 4 images from PDF
+                            break
                         image_bytes = image_file_object.data
                         image_name = image_file_object.name
                         image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
@@ -223,8 +235,13 @@ async def upload_files(
                             img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
                             has_pdf_photos = True
                             tasks.append(_process_file_to_thread(img_filename, image_bytes))
-                            if len(tasks) >= 3:
+                            pdf_img_count += 1
+                            if len(tasks) >= 2:
                                 await flush_tasks()
+                    if pdf_img_count >= 4:
+                        break
+                del reader, file_bytes
+                gc.collect()
             except Exception as e:
                 print(f"Error extracting photos from PDF: {e}")
                 pass
