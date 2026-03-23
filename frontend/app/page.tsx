@@ -255,14 +255,28 @@ export default function Home() {
           className={`${styles.modelOption} ${selectedModel === "gemini" ? styles.modelOptionActive : ""}`}
         >
           <span className={styles.modelName}>Google Gemini</span>
-          <span className={styles.modelDesc}>Výchozí stabilní model s multimodální vizí</span>
+          <span className={styles.modelDesc}>Výchozí model s multimodální vizí</span>
         </button>
         <button
-          onClick={() => setSelectedModel("gpt-5")}
-          className={`${styles.modelOption} ${selectedModel !== "gemini" ? styles.modelOptionActive : ""}`}
+          onClick={() => setSelectedModel("gpt-4o")}
+          className={`${styles.modelOption} ${selectedModel === "gpt-4o" ? styles.modelOptionActive : ""}`}
         >
-          <span className={styles.modelName}>OpenAI GPT-5</span>
-          <span className={styles.modelDesc}>Experimentální model přes podnikovou gateway</span>
+          <span className={styles.modelName}>GPT-4o</span>
+          <span className={styles.modelDesc}>Nejschopnější OpenAI model</span>
+        </button>
+        <button
+          onClick={() => setSelectedModel("gpt-4o-mini")}
+          className={`${styles.modelOption} ${selectedModel === "gpt-4o-mini" ? styles.modelOptionActive : ""}`}
+        >
+          <span className={styles.modelName}>GPT-4o mini</span>
+          <span className={styles.modelDesc}>Rychlejší a levnější varianta</span>
+        </button>
+        <button
+          onClick={() => setSelectedModel("o3-mini")}
+          className={`${styles.modelOption} ${selectedModel === "o3-mini" ? styles.modelOptionActive : ""}`}
+        >
+          <span className={styles.modelName}>o3-mini</span>
+          <span className={styles.modelDesc}>Reasoning model pro složité úlohy</span>
         </button>
       </div>
     </div>

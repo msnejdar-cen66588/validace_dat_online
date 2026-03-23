@@ -16,13 +16,18 @@ class LLMClient:
         self.model_name = model_name.lower()
         self.gemini_client = None
         
-        if "gemini" in self.model_name:
+        if self._is_gemini():
             if GEMINI_API_KEY:
                 self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        elif "gpt" in self.model_name or "openai" in self.model_name:
+        else:
+            # Any non-Gemini model goes through OpenAI-compatible endpoint
             self.openai_api_key = OPENAI_API_KEY
             self.openai_base_url = OPENAI_BASE_URL
-            self.openai_model = OPENAI_MODEL
+            # Use the exact model name provided (e.g. gpt-4o, gpt-4o-mini, o3-mini)
+            self.openai_model = self.model_name if self.model_name != "openai" else OPENAI_MODEL
+
+    def _is_gemini(self) -> bool:
+        return "gemini" in self.model_name
 
     async def generate_content(
         self,
@@ -37,7 +42,7 @@ class LLMClient:
         if isinstance(contents, str) or not isinstance(contents, list):
             contents = [contents]
 
-        if "gemini" in self.model_name:
+        if self._is_gemini():
             return await self._generate_gemini(
                 system_instruction, contents, response_mime_type, max_output_tokens, temperature
             )
@@ -130,11 +135,8 @@ class LLMClient:
         if response_mime_type == "application/json":
             payload["response_format"] = {"type": "json_object"}
 
-        # Multiple header variations used by various corporate gateways (Azure, APIC, etc.)
         headers = {
             "Authorization": f"Bearer {self.openai_api_key}",
-            "api-key": self.openai_api_key,
-            "Web-Api-Key": self.openai_api_key,
             "Content-Type": "application/json"
         }
 
