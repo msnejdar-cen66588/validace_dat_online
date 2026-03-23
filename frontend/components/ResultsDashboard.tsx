@@ -104,10 +104,19 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
             let num = parseFloat(strVal.replace(',', '.')) || 1.0;
             // Ochrana proti tomu, když AI vrátí procenta (85 místo 0.85)
             if (num > 5.0) num = num / 100.0;
-            // K1 musí být vždy 0.85 (redukce pramene ceny za inzerci)
-            if (key === 'k1') return Math.max(0.80, Math.min(num, 0.90));
-            // Ostatní koeficienty: rozumný rozsah 0.75 – 1.25
-            return Math.max(0.75, Math.min(num, 1.25));
+            // Per-key ranges přesně dle backendu (COEFFICIENT_RANGES)
+            const ranges: Record<string, [number, number]> = {
+                'k1': [0.80, 0.90],
+                'k2': [0.90, 1.10],
+                'k3': [0.90, 1.10],
+                'k4': [0.85, 1.15],
+                'k5': [0.80, 1.20],
+                'k6': [0.90, 1.10],
+                'k7': [0.95, 1.05],
+                'k8': [0.95, 1.05],
+            };
+            const [lo, hi] = ranges[key] || [0.80, 1.20];
+            return Math.max(lo, Math.min(num, hi));
         };
 
         // Přepočítej NHZP pokud uživatel upravil koeficienty NEBO vždy (pro konzistenci)
@@ -157,17 +166,8 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
             adjustedNhzp = finalNhzp;
 
         } else if (samples.length > 0) {
-            // Fallback bez plochy – průměr cen vzorků × IO × K1
-            let totalVal = 0;
-            samples.forEach((s: any) => {
-                const kData = hasCustomCoeffs ? (customCoeffs[s.id] || s.koeficienty || {}) : (s.koeficienty || {});
-                let io = 1.0;
-                ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach(k => {
-                    io *= parseK(kData[k], k);
-                });
-                totalVal += s.cena_czk * io;
-            });
-            adjustedNhzp = Math.round(totalVal / samples.length);
+            // Nelze přepočítat NHZP bez zadané plochy – zobrazíme AI odhad
+            adjustedNhzp = valuation.details.odhad_czk || 0;
         }
     }
 
