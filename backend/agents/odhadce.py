@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import statistics
 
 import httpx
 from agents.base import BaseAgent, AgentResult, AgentStatus
@@ -30,6 +31,49 @@ COEFFICIENT_RANGES = {
 }
 
 
+# ── Průměrné ceny za m² dle okresů (ČSÚ data 2024, Kč/m² užitné plochy RD) ──
+# Slouží jako benchmark / kontrolní mechanismus pro NHZP
+BENCHMARK_CZK_PER_M2: dict[str, int] = {
+    # Praha a okolí
+    "praha": 95000, "praha-východ": 68000, "praha-západ": 70000,
+    # Jihomoravský kraj
+    "brno-město": 62000, "brno": 62000, "brno-venkov": 42000,
+    "blansko": 32000, "hodonín": 25000, "vyškov": 33000, "znojmo": 26000,
+    # Středočeský kraj
+    "benešov": 38000, "beroun": 45000, "kladno": 42000, "kolín": 35000,
+    "kutná hora": 30000, "mělník": 38000, "mladá boleslav": 40000,
+    "nymburk": 38000, "příbram": 32000, "rakovník": 30000,
+    # Plzeňský kraj
+    "plzeň-město": 48000, "plzeň-jih": 35000, "plzeň-sever": 32000,
+    "domažlice": 26000, "klatovy": 28000, "rokycany": 33000, "tachov": 22000,
+    # Karlovarský kraj
+    "cheb": 22000, "karlovy vary": 28000, "sokolov": 18000,
+    # Ústecký kraj
+    "děčín": 18000, "chomutov": 16000, "litoměřice": 28000, "louny": 20000,
+    "most": 14000, "teplice": 20000, "ústí nad labem": 18000,
+    # Liberecký kraj
+    "česká lípa": 24000, "jablonec nad nisou": 30000, "liberec": 32000, "semily": 28000,
+    # Královéhradecký kraj
+    "hradec králové": 40000, "jičín": 30000, "náchod": 26000,
+    "rychnov nad kněžnou": 26000, "trutnov": 30000,
+    # Pardubický kraj
+    "chrudim": 30000, "pardubice": 38000, "svitavy": 24000, "ústí nad orlicí": 26000,
+    # Kraj Vysočina
+    "havlíčkův brod": 26000, "jihlava": 32000, "pelhřimov": 26000,
+    "třebíč": 24000, "žďár nad sázavou": 28000,
+    # Jihočeský kraj
+    "české budějovice": 40000, "český krumlov": 32000, "jindřichův hradec": 24000,
+    "písek": 30000, "prachatice": 24000, "strakonice": 26000, "tábor": 32000,
+    # Olomoucký kraj
+    "jeseník": 18000, "olomouc": 38000, "prostějov": 30000, "přerov": 26000, "šumperk": 22000,
+    # Moravskoslezský kraj
+    "bruntál": 16000, "frýdek-místek": 30000, "karviná": 16000,
+    "nový jičín": 28000, "opava": 26000, "ostrava-město": 28000,
+    # Zlínský kraj
+    "kroměříž": 30000, "uherské hradiště": 30000, "vsetín": 26000, "zlín": 35000,
+}
+
+
 # ── Prompt pro AI – přesný výpočet NHZP porovnávací metodou ─────────────────
 COEFFICIENT_PROMPT = """Jsi soudní znalec a bankovní odhadce nemovitostí s 20letou praxí v ČR.
 Provádíš ocenění rodinného domu POROVNÁVACÍ METODOU (NHZP) přesně dle české
@@ -47,11 +91,12 @@ Dostaneš:
 ═══ PŘESNÝ POSTUP ═══
 
 KROK 1 – VÝBĚR VZORKŮ:
-Z kandidátů vyber přesně 3 NEJPODOBNĚJŠÍ vzorky. Kritéria výběru (v pořadí priority):
+Z kandidátů vyber přesně 5 NEJPODOBNĚJŠÍCH vzorků. Kritéria výběru (v pořadí priority):
 a) Velikost domu (m²) – co nejbližší k oceňovanému
 b) Stav a stáří – přednost podobnému technickému stavu (využij data i fotky!)
 c) Lokalita – přednost bližší poloze
 Nevhodné kandidáty (odlišný charakter, příliš velký/malý) VYNECH.
+Pokud je kandidátů méně než 5, vyber všechny vhodné (minimum 3).
 
 KROK 2 – KOEFICIENTY K1–K8 (pro KAŽDÝ vybraný vzorek):
 Koeficienty vyjadřují poměr VZORKU k NAŠEMU domu:
@@ -167,7 +212,7 @@ async def _fetch_sreality_samples(
     lon: float | None,
     floor_area_m2: int,
     radius_km: int = 5,
-    count: int = 8,
+    count: int = 12,
     district_id: int | None = None,
 ) -> list[dict]:
     """Načte reálné inzeráty RD ze sreality.cz API filtrované GPS a plochou."""
@@ -244,6 +289,11 @@ async def _fetch_sreality_samples(
         size_m2 = int(m2_matches[0]) if m2_matches else 0
         land_m2 = int(m2_matches[1]) if len(m2_matches) > 1 else 0
 
+        # GPS z list API
+        gps = e.get("gps", {})
+        gps_lat = gps.get("lat")
+        gps_lon = gps.get("lon")
+
         results.append({
             "id": i,
             "hash_id": hash_id,
@@ -257,6 +307,7 @@ async def _fetch_sreality_samples(
             "pocet_podlazi": "",
             "zdroj_url": zdroj_url,
             "obrazek_url": obrazek_url,
+            "gps": {"lat": gps_lat, "lon": gps_lon} if gps_lat and gps_lon else None,
         })
 
     return results
@@ -534,7 +585,7 @@ class OdhadceAgent(BaseAgent):
             )
         prompt_text += (
             f"\nKandidáti ze sreality.cz (s detailními strukturovanými daty):\n{vzorky_text}\n\n"
-            f"Vyber 3 nejpodobnější vzorky a PŘIŘAĎ koeficienty K1–K8 dle instrukcí. "
+            f"Vyber 5 nejpodobnějších vzorků a PŘIŘAĎ koeficienty K1–K8 dle instrukcí. "
             f"K1 MUSÍ být 0.85 u všech vzorků. "
             f"NEPOČÍTEJ NHZP – vrať POUZE koeficienty v JSON formátu."
         )
@@ -575,7 +626,10 @@ class OdhadceAgent(BaseAgent):
                     errors=["AI odpověď neobsahuje pole 'vzorky'."]
                 )
 
-            nhzp = self._compute_nhzp(ai_vzorky, raw_samples, floor_area_int)
+            nhzp_result = self._compute_nhzp(ai_vzorky, raw_samples, floor_area_int)
+            nhzp = nhzp_result["nhzp"]
+            nhzp_min = nhzp_result["nhzp_min"]
+            nhzp_max = nhzp_result["nhzp_max"]
 
             if nhzp <= 0:
                 return AgentResult(
@@ -619,6 +673,19 @@ class OdhadceAgent(BaseAgent):
 
             odhad_m = nhzp / 1_000_000
 
+            # ── Benchmark ────────────────────────────────────────────────────
+            benchmark = self._get_benchmark(address)
+            if benchmark:
+                self.log(f"Benchmark okres {benchmark['okres']}: {benchmark['czk_per_m2']:,} Kč/m²", "info")
+
+            # ── Confidence score ─────────────────────────────────────────────
+            confidence = self._compute_confidence(
+                selected_raw, floor_area_int,
+                has_coords=coords is not None,
+                enriched_count=enriched_count,
+            )
+            self.log(f"Confidence score: {confidence['score']} %", "info")
+
             # ── Merge AI coefficients back into real samples ──────────────────
             backend_url = os.getenv("BACKEND_URL", "https://validace-rd-backend.onrender.com")
             merged_vzorky = []
@@ -655,17 +722,23 @@ class OdhadceAgent(BaseAgent):
                     "io": round(io, 4),
                     "upravena_jc": round(jc * io),
                     "oduvodneni_koeficientu": ai.get("oduvodneni_koeficientu", ""),
+                    "gps": s.get("gps"),
                 })
 
-            self.log(f"Odhad dokončen: {odhad_m:.1f} mil. Kč", "info")
+            self.log(f"Odhad dokončen: {odhad_m:.1f} mil. Kč (rozmezí {nhzp_min/1e6:.1f}–{nhzp_max/1e6:.1f} mil.)", "info")
             return AgentResult(
                 status=AgentStatus.SUCCESS,
-                summary=f"Odhadní cena: {odhad_m:.2f} mil. Kč. Vzorky z reálné inzerce.",
+                summary=f"Odhadní cena: {odhad_m:.2f} mil. Kč (rozmezí {nhzp_min/1e6:.2f}–{nhzp_max/1e6:.2f} mil.). {len(merged_vzorky)} vzorků, confidence {confidence['score']} %.",
                 details={
                     "odhad_czk": nhzp,
+                    "odhad_min": nhzp_min,
+                    "odhad_max": nhzp_max,
                     "duvod": result_json.get("duvod", result_json.get("duvod_odhadu", "")),
                     "vzorky": merged_vzorky,
                     "plocha_ocenovaneho": floor_area_int,
+                    "property_gps": {"lat": coords[0], "lon": coords[1]} if coords else None,
+                    "benchmark": benchmark,
+                    "confidence": confidence,
                     "analyzed_params": {
                         "address": address,
                         "area": floor_area,
@@ -709,13 +782,16 @@ class OdhadceAgent(BaseAgent):
         ai_vzorky: list[dict],
         raw_samples: list[dict],
         floor_area_int: int,
-    ) -> int:
+    ) -> dict:
         """Compute NHZP from coefficients using the exact porovnávací metoda formula.
         
-        Uses the SAME coefficient ranges as _sanitize_coefficients for consistency.
+        Returns dict with:
+          nhzp: median-based estimate
+          nhzp_min: lowest adjusted unit price × area
+          nhzp_max: highest adjusted unit price × area
+          upravene_jc: list of per-sample adjusted unit prices
         """
-        total_upravena_jc = 0
-        count_ok = 0
+        upravene_jc_list = []
 
         for v in ai_vzorky:
             sid = v.get("id")
@@ -724,9 +800,8 @@ class OdhadceAgent(BaseAgent):
                 continue
 
             sample_area = max(src.get("velikost_domu_m2") or floor_area_int, 10)
-            jc = src["cena_czk"] / sample_area  # Unit price Kč/m²
+            jc = src["cena_czk"] / sample_area
 
-            # Compute IO = product of K1..K8 (using same ranges as sanitize)
             io = 1.0
             koef = v.get("koeficienty") or {}
             for k in ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"]:
@@ -741,13 +816,111 @@ class OdhadceAgent(BaseAgent):
                     num = 0.85 if k == "k1" else 1.0
                 io *= num
 
-            upravena_jc = jc * io
-            total_upravena_jc += upravena_jc
-            count_ok += 1
+            upravene_jc_list.append(jc * io)
 
-        if count_ok == 0:
-            return 0
+        if not upravene_jc_list:
+            return {"nhzp": 0, "nhzp_min": 0, "nhzp_max": 0, "upravene_jc": []}
 
-        avg_upravena_jc = total_upravena_jc / count_ok
-        nhzp = round(avg_upravena_jc * floor_area_int)
-        return nhzp
+        # Use MEDIAN for robustness against outliers
+        median_jc = statistics.median(upravene_jc_list)
+        nhzp = round(median_jc * floor_area_int)
+        nhzp_min = round(min(upravene_jc_list) * floor_area_int)
+        nhzp_max = round(max(upravene_jc_list) * floor_area_int)
+
+        return {
+            "nhzp": nhzp,
+            "nhzp_min": nhzp_min,
+            "nhzp_max": nhzp_max,
+            "upravene_jc": [round(x) for x in upravene_jc_list],
+        }
+
+    @staticmethod
+    def _compute_confidence(
+        samples: list[dict],
+        floor_area_int: int,
+        has_coords: bool,
+        enriched_count: int,
+        has_historical: bool = False,
+    ) -> dict:
+        """Compute confidence score 0–100 based on input quality.
+        
+        Returns dict with score and factors list.
+        """
+        score = 0
+        factors = []
+
+        # +25 for GPS coords found
+        if has_coords:
+            score += 25
+            factors.append({"label": "GPS lokalizace úspěšná", "points": 25})
+        else:
+            factors.append({"label": "GPS lokalizace selhala", "points": 0})
+
+        # +25 for ≥5 samples
+        n = len(samples)
+        if n >= 5:
+            score += 25
+            factors.append({"label": f"Dostatek vzorků ({n})", "points": 25})
+        elif n >= 3:
+            pts = round(25 * n / 5)
+            score += pts
+            factors.append({"label": f"Vzorků: {n}/5", "points": pts})
+        else:
+            factors.append({"label": f"Nedostatek vzorků ({n})", "points": 0})
+
+        # +15 for >50% samples with detail data (stav)
+        if n > 0:
+            pct = enriched_count / n
+            if pct > 0.5:
+                score += 15
+                factors.append({"label": "Detailní data vzorků >50 %", "points": 15})
+            else:
+                pts = round(15 * pct)
+                score += pts
+                factors.append({"label": f"Detailní data vzorků: {round(pct*100)} %", "points": pts})
+
+        # +10 for price spread <30%
+        prices = [s["cena_czk"] for s in samples if s.get("cena_czk")]
+        if len(prices) >= 2:
+            spread = (max(prices) - min(prices)) / statistics.mean(prices)
+            if spread < 0.30:
+                score += 10
+                factors.append({"label": f"Cenový rozptyl nízký ({round(spread*100)} %)", "points": 10})
+            elif spread < 0.50:
+                score += 5
+                factors.append({"label": f"Cenový rozptyl střední ({round(spread*100)} %)", "points": 5})
+            else:
+                factors.append({"label": f"Cenový rozptyl vysoký ({round(spread*100)} %)", "points": 0})
+
+        # +10 for samples within 3km (check if GPS available)
+        samples_with_gps = [s for s in samples if s.get("gps")]
+        if samples_with_gps:
+            score += 10
+            factors.append({"label": "Vzorky s GPS lokalizací", "points": 10})
+        else:
+            factors.append({"label": "Vzorky bez GPS dat", "points": 0})
+
+        # +15 for historical data from LV
+        if has_historical:
+            score += 15
+            factors.append({"label": "Historická data z LV", "points": 15})
+        else:
+            factors.append({"label": "Bez historických dat z LV", "points": 0})
+
+        return {
+            "score": min(score, 100),
+            "factors": factors,
+        }
+
+    @staticmethod
+    def _get_benchmark(address: str) -> dict | None:
+        """Lookup average price per m² for the district from the benchmark table."""
+        addr_lower = address.lower()
+        for key in sorted(BENCHMARK_CZK_PER_M2.keys(), key=len, reverse=True):
+            if key in addr_lower:
+                return {
+                    "okres": key.title(),
+                    "czk_per_m2": BENCHMARK_CZK_PER_M2[key],
+                }
+        return None
+

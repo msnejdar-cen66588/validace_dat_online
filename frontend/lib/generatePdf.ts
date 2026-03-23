@@ -203,22 +203,55 @@ export async function generatePdfReport({ result, valuation, adjustedNhzp, apiBa
     }
     y += 5;
 
-    // ── Valuation (NHZP) ──
+    // ── Valuation (NHZP) – Professional Layout ──
     if (valuation?.details && adjustedNhzp) {
         checkPage(30);
         doc.setFillColor(240, 240, 240);
         doc.rect(margin, y - 4, contentWidth, 8, 'F');
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text(sanitize('Trzni odhad (NHZP)'), margin + 2, y + 1);
-        y += 10;
+        doc.text(sanitize('Trzni odhad (NHZP) – porovnavaci metoda'), margin + 2, y + 1);
+        y += 12;
 
-        doc.setFontSize(14);
+        // Main price
+        doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(30, 64, 175);
         doc.text(formatCurrency(adjustedNhzp), margin, y);
         doc.setTextColor(0, 0, 0);
-        y += 8;
+        y += 7;
+
+        // Price range
+        if (valuation.details.odhad_min && valuation.details.odhad_max) {
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(100, 116, 139);
+            doc.text(
+                `Cenove rozpeti: ${formatCurrency(valuation.details.odhad_min)} - ${formatCurrency(valuation.details.odhad_max)}`,
+                margin, y
+            );
+            doc.setTextColor(0, 0, 0);
+            y += 6;
+        }
+
+        // Benchmark
+        if (valuation.details.benchmark) {
+            doc.setFontSize(9);
+            doc.text(
+                sanitize(`Prumerna cena v ${valuation.details.benchmark.okres}: ${valuation.details.benchmark.czk_per_m2.toLocaleString('cs-CZ')} Kc/m2`),
+                margin, y
+            );
+            y += 5;
+        }
+
+        // Confidence
+        if (valuation.details.confidence) {
+            const cs = valuation.details.confidence.score;
+            const csLabel = cs >= 70 ? 'vysoka' : cs >= 40 ? 'stredni' : 'nizka';
+            doc.text(sanitize(`Spolehlivost odhadu: ${cs} % (${csLabel})`), margin, y);
+            y += 5;
+        }
+        y += 3;
 
         if (valuation.details.duvod) {
             doc.setFontSize(10);
@@ -229,23 +262,63 @@ export async function generatePdfReport({ result, valuation, adjustedNhzp, apiBa
             y += lines.length * 5 + 3;
         }
 
-        // Samples
+        // ── Coefficient Table ──
         const samples = valuation.details.vzorky || [];
         if (samples.length > 0) {
             y += 3;
-            checkPage(12);
+            checkPage(20 + samples.length * 6);
             doc.setFontSize(11);
             doc.setFont('helvetica', 'bold');
-            doc.text(sanitize('Srovnavaci vzorky:'), margin, y);
-            y += 6;
+            doc.text(sanitize('Tabulka koeficientu K1-K8:'), margin, y);
+            y += 7;
 
+            // Table header
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            const colW = [40, 14, 14, 14, 14, 14, 14, 14, 14, 16, 16];
+            const headers = ['Vzorek', 'K1', 'K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'IO', 'Upr.JC'];
+            let x = margin;
+            doc.setFillColor(226, 232, 240);
+            doc.rect(margin, y - 3, contentWidth, 5, 'F');
+            for (let i = 0; i < headers.length; i++) {
+                doc.text(headers[i], x + 1, y);
+                x += colW[i];
+            }
+            y += 5;
+
+            // Table rows
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7);
+            for (const s of samples.slice(0, 8)) {
+                checkPage(6);
+                x = margin;
+                const addr = sanitize(s.adresa || '?').substring(0, 22);
+                doc.text(addr, x + 1, y);
+                x += colW[0];
+
+                const koef = s.koeficienty || {};
+                ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].forEach((k, ki) => {
+                    const val = koef[k] ?? 1.0;
+                    doc.text(String(val), x + 1, y);
+                    x += colW[ki + 1];
+                });
+                doc.text(String(s.io ?? '-'), x + 1, y);
+                x += colW[9];
+                doc.text(String(s.upravena_jc ?? '-'), x + 1, y);
+                y += 5;
+            }
+
+            // Sample details below table
+            y += 4;
             doc.setFontSize(9);
             doc.setFont('helvetica', 'normal');
-            for (const s of samples.slice(0, 5)) {
+            for (const s of samples.slice(0, 8)) {
                 checkPage(6);
                 const cena = typeof s.cena_czk === 'number' ? s.cena_czk : 0;
                 const velikost = parseFloat(String(s.velikost_domu_m2 || 0)) || 0;
-                const line = `- ${sanitize(s.adresa || '?')} | ${formatCurrency(cena)} | ${velikost} m2`;
+                const stav = s.stav ? ` | ${sanitize(s.stav)}` : '';
+                const rok = s.rok_stavby ? ` | ${s.rok_stavby}` : '';
+                const line = `- ${sanitize(s.adresa || '?')} | ${formatCurrency(cena)} | ${velikost} m2${stav}${rok}`;
                 doc.text(line, margin + 2, y);
                 y += 5;
             }

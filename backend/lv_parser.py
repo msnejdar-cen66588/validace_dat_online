@@ -55,6 +55,16 @@ class LVEncumbrance:
 
 
 @dataclass
+class LVAcquisitionTitle:
+    """Entry from section E – Nabývací tituly (historical transactions)."""
+    type: str = ""              # "Kupní smlouva", "Darovací smlouva", etc.
+    date: str = ""              # e.g. "15.03.2018"
+    price_czk: int = 0          # Extracted price if available
+    description: str = ""       # Full text
+    legal_effect: str = ""      # "právní účinky vkladu od ..."
+
+
+@dataclass
 class LVData:
     """Full parsed LV data."""
     # Header
@@ -72,6 +82,7 @@ class LVData:
     encumbrances: list[LVEncumbrance] = field(default_factory=list)
     notes: str = ""  # Section D
     seals: str = ""  # Plomby
+    acquisition_titles: list[LVAcquisitionTitle] = field(default_factory=list)  # Section E
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -205,6 +216,15 @@ def parse_lv(pdf_bytes: bytes) -> LVData:
     if plomby_section:
         data.seals = plomby_section.strip()
 
+    # ── Section E: Nabývací tituly (Acquisition titles / historical transactions) ──
+    e_section = _extract_section(
+        full_text,
+        r"E\s+Nab[\u00fd\u00fdy]vac[\u00ed\u00edi]\s+tituly",
+        r"F\s+|Nemovitosti\s+jsou|Vyhotoveno"
+    )
+    if e_section:
+        _parse_acquisition_titles(e_section, data)
+
     return data
 
 
@@ -270,4 +290,68 @@ def _parse_encumbrances(section_text: str, data: LVData):
             enc.document = m.group(1).strip()
 
         data.encumbrances.append(enc)
-"""Parser for List Vlastnictví (LV) – property ownership certificate from Czech cadastre."""
+
+
+def _parse_acquisition_titles(section_text: str, data: LVData) -> None:
+    """Parse section E – Nabývací tituly for historical transaction data."""
+    # Split into individual title entries – separated by blank lines or V- markers
+    entries = re.split(r"\n\s*\n|\n(?=V-\d+)", section_text.strip())
+
+    for entry in entries:
+        entry = entry.strip()
+        if not entry or len(entry) < 10:
+            continue
+
+        title = LVAcquisitionTitle()
+        title.description = entry
+
+        # Detect type
+        entry_lower = entry.lower()
+        if "kupní smlouv" in entry_lower:
+            title.type = "Kupní smlouva"
+        elif "darovací smlouv" in entry_lower:
+            title.type = "Darovací smlouva"
+        elif "dědic" in entry_lower:
+            title.type = "Dědictví"
+        elif "rozsud" in entry_lower:
+            title.type = "Rozsudek"
+        elif "usnesení" in entry_lower:
+            title.type = "Usnesení"
+        elif "smlouv" in entry_lower:
+            title.type = "Smlouva"
+        else:
+            title.type = "Jiný titul"
+
+        # Extract date (DD.MM.YYYY)
+        date_match = re.search(r"(\d{1,2}\.\d{1,2}\.\d{4})", entry)
+        if date_match:
+            title.date = date_match.group(1)
+
+        # Extract price – patterns: "5.540.000,00 Kč", "5 540 000 Kč", "za 3000000"
+        price_patterns = [
+            r"(\d[\d\.\s]+(?:,\d{2})?)\s*(?:Kč|CZK|,-)",
+            r"za\s+(\d[\d\.\s,]+)\s",
+        ]
+        for pat in price_patterns:
+            price_match = re.search(pat, entry)
+            if price_match:
+                price_str = price_match.group(1)
+                # Remove thousands separators (dots, spaces) and parse
+                clean = re.sub(r"[\.\s]", "", price_str).replace(",", ".")
+                try:
+                    title.price_czk = int(float(clean))
+                except (ValueError, TypeError):
+                    pass
+                if title.price_czk > 0:
+                    break
+
+        # Extract legal effect date
+        effect_match = re.search(
+            r"[Pp]rávní\s+účinky\s+(?:vkladu|zápisu)\s+(?:ke?\s+dni|ode?\s+dne)\s+(\d{1,2}\.\d{1,2}\.\d{4})",
+            entry
+        )
+        if effect_match:
+            title.legal_effect = effect_match.group(1)
+
+        data.acquisition_titles.append(title)
+

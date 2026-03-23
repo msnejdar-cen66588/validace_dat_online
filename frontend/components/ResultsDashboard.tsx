@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import styles from './ResultsDashboard.module.css';
 import type { PipelineResult } from '@/lib/api';
 import { API_BASE } from '@/lib/api';
@@ -21,6 +21,109 @@ const AGENT_META: Record<string, { icon: string; label: string; color: string }>
     KatastralniAnalytik: { icon: '🏛️', label: 'Katastr & LV', color: '#7c3aed' },
     Strateg: { icon: '🎯', label: 'Závěrečné hodnocení', color: '#10b981' },
 };
+
+// ── Leaflet Map Component (loads from CDN to avoid SSR issues) ──
+function ValuationMap({ propertyGps, samples }: { propertyGps: { lat: number; lon: number }; samples: any[] }) {
+    const mapRef = useRef<HTMLDivElement>(null);
+    const mapInstanceRef = useRef<any>(null);
+
+    useEffect(() => {
+        if (!mapRef.current || mapInstanceRef.current) return;
+
+        // Load Leaflet CSS
+        if (!document.getElementById('leaflet-css')) {
+            const link = document.createElement('link');
+            link.id = 'leaflet-css';
+            link.rel = 'stylesheet';
+            link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+            document.head.appendChild(link);
+        }
+
+        // Load Leaflet JS
+        const loadLeaflet = () => {
+            if ((window as any).L) {
+                initMap((window as any).L);
+                return;
+            }
+            if (!document.getElementById('leaflet-js')) {
+                const script = document.createElement('script');
+                script.id = 'leaflet-js';
+                script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+                script.onload = () => initMap((window as any).L);
+                document.head.appendChild(script);
+            } else {
+                // Script loading, wait
+                const interval = setInterval(() => {
+                    if ((window as any).L) {
+                        clearInterval(interval);
+                        initMap((window as any).L);
+                    }
+                }, 100);
+            }
+        };
+
+        const initMap = (L: any) => {
+            if (!mapRef.current || mapInstanceRef.current) return;
+            const map = L.map(mapRef.current).setView([propertyGps.lat, propertyGps.lon], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap',
+                maxZoom: 18,
+            }).addTo(map);
+
+            // Property marker (blue)
+            const blueIcon = L.divIcon({
+                html: '<div style="background:#1e40af;width:14px;height:14px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+                className: '',
+            });
+            L.marker([propertyGps.lat, propertyGps.lon], { icon: blueIcon })
+                .addTo(map)
+                .bindPopup('<b>Oceňovaný dům</b>');
+
+            // Sample markers (red)
+            const redIcon = L.divIcon({
+                html: '<div style="background:#ef4444;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 4px rgba(0,0,0,0.3)"></div>',
+                iconSize: [16, 16],
+                iconAnchor: [8, 8],
+                className: '',
+            });
+            const bounds = [L.latLng(propertyGps.lat, propertyGps.lon)];
+            for (const s of samples) {
+                if (s.gps?.lat && s.gps?.lon) {
+                    const m = L.marker([s.gps.lat, s.gps.lon], { icon: redIcon }).addTo(map);
+                    m.bindPopup(`<b>${s.adresa}</b><br>${s.cena_czk?.toLocaleString('cs-CZ')} Kč<br>${s.velikost_domu_m2} m²`);
+                    bounds.push(L.latLng(s.gps.lat, s.gps.lon));
+                }
+            }
+            if (bounds.length > 1) {
+                map.fitBounds(L.latLngBounds(bounds).pad(0.15));
+            }
+            mapInstanceRef.current = map;
+        };
+
+        loadLeaflet();
+
+        return () => {
+            if (mapInstanceRef.current) {
+                mapInstanceRef.current.remove();
+                mapInstanceRef.current = null;
+            }
+        };
+    }, [propertyGps, samples]);
+
+    return (
+        <div style={{ marginTop: '16px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#334155', marginBottom: '8px' }}>🗺️ Mapa vzorků</h4>
+            <div ref={mapRef} style={{ width: '100%', height: '320px', borderRadius: '12px', border: '1px solid #cbd5e1', overflow: 'hidden' }} />
+            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', display: 'flex', gap: '12px' }}>
+                <span>🔵 Oceňovaný dům</span>
+                <span>🔴 Srovnávací vzorky</span>
+            </div>
+        </div>
+    );
+}
+
 
 export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
@@ -350,15 +453,85 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                 📊 Tržní odhad (NHZP)
                             </h3>
                         </div>
-                        <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                            <div style={{ fontSize: '14px', color: '#475569', marginBottom: '4px' }}>Odhadovaná obvyklá cena</div>
-                            <div style={{ fontSize: '36px', fontWeight: 800, color: '#1e40af' }}>
-                                {adjustedNhzp.toLocaleString('cs-CZ')} Kč
+
+                        {/* ── Main Price + Range + Confidence ── */}
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '32px', padding: '16px 0', flexWrap: 'wrap' }}>
+                            <div style={{ textAlign: 'center', flex: '1 1 auto' }}>
+                                <div style={{ fontSize: '14px', color: '#475569', marginBottom: '4px' }}>Odhadovaná obvyklá cena</div>
+                                <div style={{ fontSize: '36px', fontWeight: 800, color: '#1e40af' }}>
+                                    {adjustedNhzp.toLocaleString('cs-CZ')} Kč
+                                </div>
+                                {valuation.details.odhad_min && valuation.details.odhad_max && (
+                                    <div style={{ fontSize: '14px', color: '#64748b', marginTop: '4px' }}>
+                                        Cenové rozpětí: {valuation.details.odhad_min.toLocaleString('cs-CZ')} – {valuation.details.odhad_max.toLocaleString('cs-CZ')} Kč
+                                    </div>
+                                )}
+                                {valuation.details.benchmark && (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '8px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '20px', padding: '4px 14px', fontSize: '13px', color: '#166534' }}>
+                                        📍 Prům. cena v {valuation.details.benchmark.okres}: {valuation.details.benchmark.czk_per_m2.toLocaleString('cs-CZ')} Kč/m²
+                                    </div>
+                                )}
                             </div>
-                            <div style={{ fontSize: '14px', color: '#64748b', marginTop: '8px', maxWidth: '600px', margin: '8px auto 0' }}>
-                                {valuation.details.duvod}
-                            </div>
+
+                            {/* ── Confidence Gauge ── */}
+                            {valuation.details.confidence && (
+                                <div style={{ flex: '0 0 auto', textAlign: 'center' }}>
+                                    <div style={{ position: 'relative', width: '90px', height: '90px' }}>
+                                        <svg width="90" height="90" viewBox="0 0 90 90">
+                                            <circle cx="45" cy="45" r="38" fill="none" stroke="#e2e8f0" strokeWidth="8" />
+                                            <circle
+                                                cx="45" cy="45" r="38" fill="none"
+                                                stroke={valuation.details.confidence.score >= 70 ? '#22c55e' : valuation.details.confidence.score >= 40 ? '#f59e0b' : '#ef4444'}
+                                                strokeWidth="8"
+                                                strokeDasharray={`${(valuation.details.confidence.score / 100) * 238.76} 238.76`}
+                                                strokeLinecap="round"
+                                                transform="rotate(-90 45 45)"
+                                            />
+                                        </svg>
+                                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '20px', fontWeight: 800, color: valuation.details.confidence.score >= 70 ? '#22c55e' : valuation.details.confidence.score >= 40 ? '#f59e0b' : '#ef4444' }}>
+                                            {valuation.details.confidence.score}%
+                                        </div>
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>Spolehlivost</div>
+                                    {/* Confidence factors tooltip */}
+                                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                                        {valuation.details.confidence.factors?.slice(0, 3).map((f: any, i: number) => (
+                                            <span key={i}>{f.points > 0 ? '✓' : '·'} {f.label}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
+
+                        <div style={{ fontSize: '14px', color: '#64748b', maxWidth: '600px', margin: '8px auto', textAlign: 'center' }}>
+                            {valuation.details.duvod}
+                        </div>
+
+                        {/* ── Historical prices from LV ── */}
+                        {(() => {
+                            const katAgent = agents['KatastralniAnalytik'];
+                            const acqTitles = katAgent?.result?.details?.acquisition_titles || [];
+                            const priced = acqTitles.filter((t: any) => t.price_czk > 0);
+                            if (priced.length === 0) return null;
+                            return (
+                                <div style={{ marginTop: '12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '12px 16px' }}>
+                                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#9a3412', marginBottom: '6px' }}>📜 Historické kupní ceny (z LV)</div>
+                                    {priced.map((t: any, i: number) => (
+                                        <div key={i} style={{ fontSize: '13px', color: '#78350f' }}>
+                                            {t.type}{t.date ? ` (${t.date})` : ''}: <strong>{t.price_czk.toLocaleString('cs-CZ')} Kč</strong>
+                                        </div>
+                                    ))}
+                                </div>
+                            );
+                        })()}
+
+                        {/* ── LEAFLET MAP ── */}
+                        {valuation.details.property_gps && (
+                            <ValuationMap
+                                propertyGps={valuation.details.property_gps}
+                                samples={valuation.details.vzorky || []}
+                            />
+                        )}
 
                         <div style={{ marginTop: '16px' }}>
                             <h4 style={{ fontSize: '15px', fontWeight: 600, color: '#334155', marginBottom: '12px' }}>Srovnávací vzorky (upravte koeficienty pro automatický přepočet)</h4>
@@ -380,11 +553,17 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                             </a>
                                                         )}
                                                     </div>
-                                                    <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>Dům: {s.velikost_domu_m2} m² | Pozemek: {s.velikost_pozemku_m2} m²</div>
-                                                    <div style={{ fontSize: '13px', color: '#64748b' }}>Stav: {s.stav}</div>
+                                                    <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>
+                                                        Dům: {s.velikost_domu_m2} m² | Pozemek: {s.velikost_pozemku_m2} m²
+                                                        {s.stav ? ` | ${s.stav}` : ''}
+                                                        {s.rok_stavby ? ` | ${s.rok_stavby}` : ''}
+                                                    </div>
                                                 </div>
                                                 <div style={{ textAlign: 'right' }}>
                                                     <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '16px' }}>{s.cena_czk.toLocaleString('cs-CZ')} Kč</div>
+                                                    {s.upravena_jc > 0 && (
+                                                        <div style={{ fontSize: '12px', color: '#64748b' }}>JC: {s.jc?.toLocaleString('cs-CZ')} Kč/m² → {s.upravena_jc?.toLocaleString('cs-CZ')} Kč/m²</div>
+                                                    )}
                                                 </div>
                                             </div>
                                             <div style={{ fontSize: '13px', color: '#475569', background: '#f8fafc', padding: '8px', borderRadius: '6px' }}>
