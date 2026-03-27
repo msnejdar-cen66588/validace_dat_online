@@ -50,6 +50,19 @@ async def health_check():
     return {"status": "ok", "service": "AI Validation Pipeline"}
 
 
+@app.get("/api/debug-config")
+async def debug_config():
+    """Check which API keys are configured (without exposing them)."""
+    from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, GEMINI_API_KEY
+    return {
+        "openai_key_set": bool(OPENAI_API_KEY and len(OPENAI_API_KEY) > 10),
+        "openai_key_prefix": OPENAI_API_KEY[:8] + "..." if OPENAI_API_KEY else "EMPTY",
+        "openai_base_url": OPENAI_BASE_URL,
+        "openai_model": OPENAI_MODEL,
+        "gemini_key_set": bool(GEMINI_API_KEY and len(GEMINI_API_KEY) > 5),
+    }
+
+
 @app.get("/api/proxy-image")
 async def proxy_image(url: str):
     """Proxy image from sreality CDN to avoid CORS restrictions in browser."""
