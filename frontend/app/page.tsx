@@ -70,7 +70,7 @@ export default function Home() {
   const [lvData, setLvData] = useState<LVData | null>(null);
   const [lvParsing, setLvParsing] = useState(false);
   const [selectedParcels, setSelectedParcels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("gemini");
+  const [selectedModel, setSelectedModel] = useState<string>("gpt-5.4-mini");
   const [pipelineStarted, setPipelineStarted] = useState(false);
   const lvInputRef = useRef<HTMLInputElement>(null);
 
@@ -266,32 +266,39 @@ export default function Home() {
       </h3>
       <div className={styles.modelGrid}>
         <button
+          onClick={() => setSelectedModel("gpt-5.4")}
+          className={`${styles.modelOption} ${selectedModel === "gpt-5.4" ? styles.modelOptionActive : ""}`}
+        >
+          <span className={styles.modelName}>GPT-5.4</span>
+          <span className={styles.modelDesc}>Nejnovější vlajkový model OpenAI</span>
+        </button>
+        <button
+          onClick={() => setSelectedModel("gpt-5.4-mini")}
+          className={`${styles.modelOption} ${selectedModel === "gpt-5.4-mini" ? styles.modelOptionActive : ""}`}
+        >
+          <span className={styles.modelName}>GPT-5.4 mini</span>
+          <span className={styles.modelDesc}>Rychlý a cenově efektivní</span>
+        </button>
+        <button
+          onClick={() => setSelectedModel("gpt-4.1")}
+          className={`${styles.modelOption} ${selectedModel === "gpt-4.1" ? styles.modelOptionActive : ""}`}
+        >
+          <span className={styles.modelName}>GPT-4.1</span>
+          <span className={styles.modelDesc}>Vyvážený výkon a cena</span>
+        </button>
+        <button
+          onClick={() => setSelectedModel("o4-mini")}
+          className={`${styles.modelOption} ${selectedModel === "o4-mini" ? styles.modelOptionActive : ""}`}
+        >
+          <span className={styles.modelName}>o4-mini</span>
+          <span className={styles.modelDesc}>Reasoning model pro analytiku</span>
+        </button>
+        <button
           onClick={() => setSelectedModel("gemini")}
           className={`${styles.modelOption} ${selectedModel === "gemini" ? styles.modelOptionActive : ""}`}
         >
           <span className={styles.modelName}>Google Gemini</span>
-          <span className={styles.modelDesc}>Výchozí model s multimodální vizí</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("gpt-4o")}
-          className={`${styles.modelOption} ${selectedModel === "gpt-4o" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>GPT-4o</span>
-          <span className={styles.modelDesc}>Nejschopnější OpenAI model</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("gpt-4o-mini")}
-          className={`${styles.modelOption} ${selectedModel === "gpt-4o-mini" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>GPT-4o mini</span>
-          <span className={styles.modelDesc}>Rychlejší a levnější varianta</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("o3-mini")}
-          className={`${styles.modelOption} ${selectedModel === "o3-mini" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>o3-mini</span>
-          <span className={styles.modelDesc}>Reasoning model pro složité úlohy</span>
+          <span className={styles.modelDesc}>Multimodální model Google</span>
         </button>
       </div>
     </div>

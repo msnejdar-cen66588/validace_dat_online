@@ -121,17 +121,34 @@ class LLMClient:
         else:
             user_content_payload = user_content
 
-        messages.append({"role": "user", "content": user_content_payload})
+        # o-series reasoning models don't support system role or temperature
+        is_reasoning = self.openai_model.startswith("o1") or self.openai_model.startswith("o3") or self.openai_model.startswith("o4")
+
+        if is_reasoning:
+            # Reasoning models: system instructions go as user message
+            messages = [{"role": "user", "content": f"Instructions: {system_instruction}\n\n{user_content_payload if isinstance(user_content_payload, str) else ''}"}]
+            if not isinstance(user_content_payload, str):
+                messages.append({"role": "user", "content": user_content_payload})
+        else:
+            messages.append({"role": "user", "content": user_content_payload})
+
+        # Newer models (gpt-5.x, gpt-4.1, o-series) require max_completion_tokens
+        uses_new_api = any(self.openai_model.startswith(p) for p in ["gpt-5", "gpt-4.1", "o1", "o3", "o4"])
 
         payload = {
             "model": self.openai_model,
             "messages": messages,
-            "max_tokens": max_output_tokens,
-            "temperature": temperature,
         }
+
+        if uses_new_api:
+            payload["max_completion_tokens"] = max_output_tokens
+        else:
+            payload["max_tokens"] = max_output_tokens
+
+        if not is_reasoning:
+            payload["temperature"] = temperature
         
-        # Only use json_object if explicitly requested AND not using a very old model
-        # For simplicity and maximum compatibility, we'll keep it for application/json
+        # Only use json_object if explicitly requested
         if response_mime_type == "application/json":
             payload["response_format"] = {"type": "json_object"}
 
