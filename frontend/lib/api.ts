@@ -233,3 +233,90 @@ export function getWebSocketUrl(sessionId: string): string {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
     return `ws://${host}:8000/ws/pipeline/${sessionId}`;
 }
+
+
+// ── Batch Processing ─────────────────────────────────────────────────────
+
+export interface BatchCase {
+    case_id: string;
+    rev_id: string;
+    session_id: string;
+    status: string;
+    address: string;
+    semaphore?: string;
+    semaphore_color?: string;
+    total_time?: number;
+    file_counts?: { images: number; pdfs: number };
+}
+
+export interface BatchUploadResponse {
+    batch_id: string;
+    total_cases: number;
+    cases: BatchCase[];
+}
+
+export interface BatchStatus {
+    batch_id: string;
+    status: string;
+    model: string;
+    total_cases: number;
+    completed_cases: number;
+    current_case_index: number;
+    estimated_remaining: number | null;
+    total_time: number | null;
+    cases: BatchCase[];
+}
+
+export async function uploadBatch(files: File[], model: string): Promise<BatchUploadResponse> {
+    const formData = new FormData();
+    files.forEach(file => {
+        formData.append('files', file);
+    });
+    formData.append('model', model);
+
+    const res = await fetch(`${API_BASE}/api/batch/upload`, {
+        method: 'POST',
+        body: formData,
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Batch upload failed' }));
+        throw new Error(err.detail || 'Batch upload failed');
+    }
+
+    return res.json();
+}
+
+export async function startBatch(batchId: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/batch/start/${batchId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Batch start failed' }));
+        throw new Error(err.detail || 'Batch start failed');
+    }
+}
+
+export async function getBatchStatus(batchId: string): Promise<BatchStatus> {
+    const res = await fetch(`${API_BASE}/api/batch/status/${batchId}`);
+    if (!res.ok) throw new Error('Batch not found');
+    return res.json();
+}
+
+export async function getBatchCaseResult(batchId: string, caseId: string): Promise<PipelineResult> {
+    const res = await fetch(`${API_BASE}/api/batch/case-result/${batchId}/${caseId}`);
+    if (!res.ok) throw new Error('Case result not available');
+    return res.json();
+}
+
+export function getBatchWebSocketUrl(batchId: string): string {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (apiUrl) {
+        const wsUrl = apiUrl.replace(/^http/, 'ws');
+        return `${wsUrl}/ws/batch/${batchId}`;
+    }
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    return `ws://${host}:8000/ws/batch/${batchId}`;
+}

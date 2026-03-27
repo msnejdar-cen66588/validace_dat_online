@@ -1,12 +1,14 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
 import styles from './page.module.css';
-import { uploadFiles, startPipeline, parsePdf, parseLv, type UploadResponse, type PipelineResult, type PropertyData, type LVData } from '@/lib/api';
+import { uploadFiles, startPipeline, parsePdf, parseLv, uploadBatch, startBatch, type UploadResponse, type PipelineResult, type PropertyData, type LVData, type BatchCase } from '@/lib/api';
 import PipelineCanvas from '@/components/PipelineCanvas';
 import ResultsDashboard from '@/components/ResultsDashboard';
 import ProcessingLoader from '@/components/ProcessingLoader';
 import AppInfo from '@/components/AppInfo';
+import BatchDashboard from '@/components/BatchDashboard';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { useBatchWebSocket } from '@/hooks/useBatchWebSocket';
 
 const EMPTY_PROPERTY_DATA: PropertyData = {
   stavba_dokoncena: null,
@@ -39,7 +41,7 @@ const DATA_LABELS: Record<keyof PropertyData, string> = {
 };
 
 export default function Home() {
-  const [step, setStep] = useState<'upload' | 'processing' | 'pipeline' | 'results'>('upload');
+  const [step, setStep] = useState<'upload' | 'processing' | 'pipeline' | 'results' | 'batch'>('upload');
   const [processingPhase, setProcessingPhase] = useState<'uploading' | 'compressing' | 'starting' | 'ready'>('uploading');
   const [files, setFiles] = useState<File[]>([]);
   const [yearBuilt, setYearBuilt] = useState('');
@@ -74,7 +76,15 @@ export default function Home() {
   const [pipelineStarted, setPipelineStarted] = useState(false);
   const lvInputRef = useRef<HTMLInputElement>(null);
 
+  // Batch mode state
+  const [mode, setMode] = useState<'single' | 'batch'>('single');
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchCases, setBatchCases] = useState<BatchCase[]>([]);
+  const [batchUploading, setBatchUploading] = useState(false);
+  const batchInputRef = useRef<HTMLInputElement>(null);
+
   const ws = useWebSocket(sessionId);
+  const batchWs = useBatchWebSocket(batchId);
 
   const handleFiles = useCallback((newFiles: FileList | File[]) => {
     const arr = Array.from(newFiles);
@@ -258,6 +268,33 @@ export default function Home() {
     setPipelineResult(finalResult);
   }
 
+  // Batch upload handler
+  const handleBatchUpload = async (fileList: FileList) => {
+    const filesArr = Array.from(fileList);
+    if (filesArr.length === 0) return;
+    setBatchUploading(true);
+    setError(null);
+    setProcessingPhase('uploading');
+    setStep('processing');
+    try {
+      setProcessingPhase('compressing');
+      const result = await uploadBatch(filesArr, selectedModel);
+      setBatchId(result.batch_id);
+      setBatchCases(result.cases);
+      setProcessingPhase('starting');
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await startBatch(result.batch_id);
+      setProcessingPhase('ready');
+      await new Promise(resolve => setTimeout(resolve, 600));
+      setStep('batch');
+    } catch (e: any) {
+      setError(e.message || 'Chyba při hromadném nahrávání');
+      setStep('upload');
+    } finally {
+      setBatchUploading(false);
+    }
+  };
+
   const renderModelSelection = () => (
     <div className={styles.modelSwitcher}>
       <h3 className={styles.modelSwitcherTitle}>
@@ -337,7 +374,8 @@ export default function Home() {
               <span className={styles.stepNum}>1</span>Nahrání
             </div>
             <div className={styles.stepLine} />
-            <div className={`${styles.step} ${(step === 'processing' || step === 'pipeline') ? styles.stepActive : ''} ${step === 'results' ? styles.stepDone : ''}`}>
+            <div
+              className={`${styles.step} ${(step === 'processing' || step === 'pipeline' || step === 'batch') ? styles.stepActive : ''} ${step === 'results' ? styles.stepDone : ''}`}>
               <span className={styles.stepNum}>2</span>Analýza
             </div>
             <div className={styles.stepLine} />
@@ -365,12 +403,24 @@ export default function Home() {
             <div className={styles.uploadContainer}>
               <h2 className={styles.sectionTitle}>
                 <span className={styles.titleGradient}>Nahrajte fotografie</span>
-                <span className={styles.titleSub}>rodinného domu</span>
+                <span className={styles.titleSub}>rodinných domů</span>
               </h2>
+
+              {/* Mode Toggle */}
+              <div className={styles.modeToggle}>
+                <button className={`${styles.modeBtn} ${mode === 'single' ? styles.modeBtnActive : ''}`} onClick={() => setMode('single')}>
+                  📋 Jednotlivé ocenění
+                </button>
+                <button className={`${styles.modeBtn} ${mode === 'batch' ? styles.modeBtnActive : ''}`} onClick={() => setMode('batch')}>
+                  📁 Hromadná kontrola
+                </button>
+              </div>
 
               {/* AI Model Selection */}
               {renderModelSelection()}
 
+            {/* Single mode content */}
+            {mode === 'single' && (<div>
             {/* Photo Drop Zone */}
             <div
               className={`${styles.dropZone} ${dragActive ? styles.dropZoneActive : ''} ${files.length > 0 ? styles.dropZoneHasFiles : ''}`}
@@ -816,6 +866,20 @@ export default function Home() {
                 </>
               )}
             </button>
+          </div>)}
+
+          {/* Batch Upload Mode */}
+          {mode === 'batch' && (
+            <div className={styles.batchUploadZone}>
+              <div className={styles.folderDropZone} onClick={() => batchInputRef.current?.click()}>
+                <input ref={batchInputRef} type="file" {...{webkitdirectory: 'true', directory: 'true'} as any} multiple onChange={(e) => e.target.files && handleBatchUpload(e.target.files)} className={styles.fileInput} />
+                <div className={styles.folderDropIcon}>📁</div>
+                <p className={styles.folderDropText}>Vyberte složku s podklady</p>
+                <p className={styles.folderDropHint}>Složka s podsložkami (1, 2, 3...) — každá obsahuje fotky + PDF formulář + LV</p>
+              </div>
+              {error && <div className={styles.error}>{error}</div>}
+            </div>
+          )}
           </div>
         </section>
       )}
@@ -855,6 +919,26 @@ export default function Home() {
           }}
         />
         )}
+
+      {/* Batch Dashboard */}
+      {step === 'batch' && batchId && (
+        <BatchDashboard
+          batchId={batchId}
+          cases={batchWs.cases.length > 0 ? batchWs.cases : batchCases}
+          currentIndex={batchWs.currentIndex}
+          estimatedRemaining={batchWs.estimatedRemaining}
+          batchComplete={batchWs.batchComplete}
+          batchTotalTime={batchWs.batchTotalTime}
+          semaphoreSummary={batchWs.semaphoreSummary}
+          isRunning={batchWs.isRunning}
+          onReset={() => {
+            setStep('upload');
+            setBatchId(null);
+            setBatchCases([]);
+            setError(null);
+          }}
+        />
+      )}
       </div>
     </main>
   );

@@ -22,6 +22,9 @@ from pdf_parser import parse_pdf
 from lv_parser import parse_lv
 from agents.odhadce import OdhadceAgent
 from report_generator import ReportGenerator
+from batch_processor import (
+    BatchSession, group_files_by_subfolder, prepare_batch_cases, run_batch,
+)
 
 app = FastAPI(
     title="AI Validation Pipeline – Rodinné Domy",
@@ -43,6 +46,10 @@ sessions: dict[str, dict] = {}
 orchestrators: dict[str, PipelineOrchestrator] = {}
 pipeline_results: dict[str, dict] = {}
 global_websockets: dict[str, list[WebSocket]] = {}
+
+# Batch session store
+batch_sessions: dict[str, BatchSession] = {}
+batch_websockets: dict[str, list[WebSocket]] = {}
 
 
 @app.get("/api/health")
@@ -529,6 +536,167 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             global_websockets[session_id].remove(websocket)
         if orchestrator and websocket in orchestrator.active_connections:
             orchestrator.active_connections.remove(websocket)
+
+
+# ── Batch Processing Endpoints ────────────────────────────────────────────
+
+
+@app.post("/api/batch/upload")
+async def batch_upload(
+    files: list[UploadFile] = File(...),
+    model: str = Form("gpt-5.4-mini"),
+):
+    """Upload a folder (webkitdirectory) for batch processing.
+    Files arrive with their relative paths preserved via webkitdirectory.
+    """
+    batch_id = str(uuid.uuid4())[:8]
+
+    # Read all files into memory, keyed by their webkitRelativePath
+    file_bytes_map: dict[str, bytes] = {}
+    for f in files:
+        if not f.filename:
+            continue
+        fbytes = await f.read()
+        file_bytes_map[f.filename] = fbytes
+
+    if not file_bytes_map:
+        raise HTTPException(status_code=400, detail="Žádné soubory nebyly nahrány.")
+
+    # Group by subfolder
+    raw_cases = group_files_by_subfolder(list(file_bytes_map.keys()), file_bytes_map)
+
+    if not raw_cases:
+        raise HTTPException(status_code=400, detail="Nebyly nalezeny žádné podsložky s podklady.")
+
+    # Prepare cases (compress images, parse PDFs)
+    prepared_cases = await prepare_batch_cases(raw_cases, batch_id)
+
+    if not prepared_cases:
+        raise HTTPException(status_code=400, detail="Žádný případ neobsahoval platné soubory.")
+
+    # Create batch session
+    batch = BatchSession(batch_id, model=model)
+    batch.cases = prepared_cases
+
+    # Also store each case session in the global sessions dict
+    # so that /api/pipeline/results/{session_id} works for individual cases
+    for case in prepared_cases:
+        sessions[case["session_id"]] = {
+            "session_id": case["session_id"],
+            "images": case["images"],
+            "year_built": case.get("year_built"),
+            "property_address": case.get("property_address", ""),
+            "property_data": case.get("property_data"),
+            "lv_pdf_path": case.get("lv_pdf_path"),
+            "selected_parcels": case.get("selected_parcels"),
+            "has_pdf_photos": case.get("has_pdf_photos", False),
+        }
+
+    batch_sessions[batch_id] = batch
+
+    # Free uploaded bytes
+    del file_bytes_map
+    gc.collect()
+
+    return {
+        "batch_id": batch_id,
+        "total_cases": len(prepared_cases),
+        "cases": [
+            {
+                "case_id": c["case_id"],
+                "rev_id": c["rev_id"],
+                "session_id": c["session_id"],
+                "address": c.get("address", ""),
+                "file_counts": c.get("file_counts", {}),
+            }
+            for c in prepared_cases
+        ],
+    }
+
+
+@app.post("/api/batch/start/{batch_id}")
+async def start_batch_pipeline(
+    batch_id: str,
+    background_tasks: BackgroundTasks,
+):
+    """Start sequential processing of all cases in a batch."""
+    batch = batch_sessions.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+
+    if batch.status == "processing":
+        raise HTTPException(status_code=400, detail="Batch is already processing.")
+
+    # Attach any websockets that connected before start
+    if batch_id in batch_websockets:
+        for ws in batch_websockets[batch_id]:
+            if ws not in batch.active_connections:
+                batch.active_connections.append(ws)
+
+    async def _run():
+        try:
+            await run_batch(batch)
+            # Store results in individual sessions too
+            for case in batch.cases:
+                sid = case["session_id"]
+                cid = case["case_id"]
+                if sid in sessions and cid in batch.case_results:
+                    sessions[sid]["result"] = batch.case_results[cid]
+        except Exception as e:
+            print(f"[Batch] Fatal error: {e}")
+            batch.status = "error"
+
+    background_tasks.add_task(_run)
+
+    return {
+        "status": "started",
+        "batch_id": batch_id,
+        "total_cases": len(batch.cases),
+    }
+
+
+@app.get("/api/batch/status/{batch_id}")
+async def get_batch_status(batch_id: str):
+    """Get current batch processing status with per-case results."""
+    batch = batch_sessions.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    return batch.to_status_dict()
+
+
+@app.get("/api/batch/case-result/{batch_id}/{case_id}")
+async def get_batch_case_result(batch_id: str, case_id: str):
+    """Get the full pipeline result for a specific case in a batch."""
+    batch = batch_sessions.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+    result = batch.case_results.get(case_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Case result not available yet.")
+    return {"completed": True, **result}
+
+
+@app.websocket("/ws/batch/{batch_id}")
+async def batch_websocket_endpoint(websocket: WebSocket, batch_id: str):
+    """WebSocket for real-time batch processing updates."""
+    await websocket.accept()
+
+    if batch_id not in batch_websockets:
+        batch_websockets[batch_id] = []
+    batch_websockets[batch_id].append(websocket)
+
+    batch = batch_sessions.get(batch_id)
+    if batch and websocket not in batch.active_connections:
+        batch.active_connections.append(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if batch_id in batch_websockets and websocket in batch_websockets[batch_id]:
+            batch_websockets[batch_id].remove(websocket)
+        if batch and websocket in batch.active_connections:
+            batch.active_connections.remove(websocket)
 
 
 # Serve uploaded/processed images (panorama, etc.)
