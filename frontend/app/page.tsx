@@ -4,6 +4,7 @@ import styles from './page.module.css';
 import { uploadFiles, startPipeline, parsePdf, parseLv, type UploadResponse, type PipelineResult, type PropertyData, type LVData } from '@/lib/api';
 import PipelineCanvas from '@/components/PipelineCanvas';
 import ResultsDashboard from '@/components/ResultsDashboard';
+import ProcessingLoader from '@/components/ProcessingLoader';
 import AppInfo from '@/components/AppInfo';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
@@ -38,7 +39,8 @@ const DATA_LABELS: Record<keyof PropertyData, string> = {
 };
 
 export default function Home() {
-  const [step, setStep] = useState<'upload' | 'pipeline' | 'results'>('upload');
+  const [step, setStep] = useState<'upload' | 'processing' | 'pipeline' | 'results'>('upload');
+  const [processingPhase, setProcessingPhase] = useState<'uploading' | 'compressing' | 'starting' | 'ready'>('uploading');
   const [files, setFiles] = useState<File[]>([]);
   const [yearBuilt, setYearBuilt] = useState('');
   const [yearReconstructed, setYearReconstructed] = useState('');
@@ -167,6 +169,8 @@ export default function Home() {
 
     setUploading(true);
     setError(null);
+    setProcessingPhase('uploading');
+    setStep('processing');
 
     try {
       // Determine property data source
@@ -180,6 +184,8 @@ export default function Home() {
 
       // If PDF was parsed and user edited the data, send user-edited version
       const finalPropertyData = dataSource === 'pdf' && extractedData ? extractedData : effectiveManualData;
+
+      setProcessingPhase('compressing');
 
       const result = await uploadFiles(
         files,
@@ -199,9 +205,18 @@ export default function Home() {
         setExtractedData(result.property_data);
       }
 
+      setProcessingPhase('starting');
+
+      // Brief pause to show the "starting agents" phase
+      await new Promise(resolve => setTimeout(resolve, 1200));
+
+      setProcessingPhase('ready');
+      await new Promise(resolve => setTimeout(resolve, 800));
+
       setStep('pipeline');
     } catch (e: any) {
       setError(e.message || 'Chyba při nahrávání');
+      setStep('upload');
     } finally {
       setUploading(false);
     }
@@ -315,7 +330,7 @@ export default function Home() {
               <span className={styles.stepNum}>1</span>Nahrání
             </div>
             <div className={styles.stepLine} />
-            <div className={`${styles.step} ${step === 'pipeline' ? styles.stepActive : ''} ${step === 'results' ? styles.stepDone : ''}`}>
+            <div className={`${styles.step} ${(step === 'processing' || step === 'pipeline') ? styles.stepActive : ''} ${step === 'results' ? styles.stepDone : ''}`}>
               <span className={styles.stepNum}>2</span>Analýza
             </div>
             <div className={styles.stepLine} />
@@ -796,6 +811,11 @@ export default function Home() {
             </button>
           </div>
         </section>
+      )}
+
+      {/* Processing Loader */}
+      {step === 'processing' && (
+        <ProcessingLoader phase={processingPhase} />
       )}
 
       {/* Pipeline Step */}
