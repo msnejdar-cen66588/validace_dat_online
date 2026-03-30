@@ -158,7 +158,13 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
             });
             if (!res.ok) throw new Error('Nepodařilo se vytvořit odhad');
             const data = await res.json();
-            setValuation(data);
+            // Check if the agent returned a failure status
+            if (data.status === 'fail') {
+                const errMsg = data.errors?.[0] || data.summary || 'Odhad se nezdařil';
+                setValError(errMsg);
+            } else {
+                setValuation(data);
+            }
         } catch (err: any) {
             setValError(err.message);
         } finally {

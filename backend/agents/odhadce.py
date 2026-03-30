@@ -175,6 +175,34 @@ DISTRICT_MAP: dict[str, int] = {
 }
 
 
+# ── Skupiny okresů dle krajů (pro multi-district proximity search) ─────────────
+# Sdružuje district_id ze Sreality do regionů, aby se prohledávaly i sousední okresy.
+_REGION_GROUPS: list[list[int]] = [
+    [2, 3, 4, 5, 6, 7, 8],                         # Jihočeský kraj
+    [10, 54, 55],                                    # Praha + Praha-východ/západ
+    [11, 12, 13, 14, 15, 16, 17],                   # Plzeňský kraj
+    [18, 19, 20],                                    # Karlovarský kraj
+    [21, 22, 23, 24, 25, 26, 27],                   # Ústecký kraj
+    [28, 29, 30, 31],                                # Liberecký kraj
+    [32, 33, 34, 35, 36],                            # Královéhradecký kraj
+    [37, 38, 39, 40],                                # Pardubický kraj
+    [41, 42, 43, 44, 45],                            # Kraj Vysočina
+    [46, 47, 48, 49, 50, 51, 52, 53, 56, 57],      # Středočeský kraj
+    [58, 59, 60, 61, 62],                            # Olomoucký kraj
+    [63, 64, 65, 66, 67, 68],                        # Moravskoslezský kraj
+    [72, 73, 74, 75, 76, 77],                        # Jihomoravský kraj
+    [69, 70, 71, 78],                                # Zlínský kraj
+]
+
+
+def _get_region_district_ids(primary_district_id: int) -> list[int]:
+    """Vrátí všechny district_id ve stejném kraji. Primární okres je první."""
+    for group in _REGION_GROUPS:
+        if primary_district_id in group:
+            return [primary_district_id] + [d for d in group if d != primary_district_id]
+    return [primary_district_id]
+
+
 def _find_district_id(address: str) -> int | None:
     """Try to match address to a district_id using DISTRICT_MAP."""
     addr_lower = address.lower()
@@ -223,15 +251,20 @@ async def _fetch_sreality_samples(
     lon: float | None,
     floor_area_m2: int,
     radius_km: int = 5,
-    max_km: int = 10,
+    max_km: int = 50,
     count: int = 20,
     district_id: int | None = None,
 ) -> list[dict]:
-    """Načte reálné inzeráty RD ze sreality.cz API, filtruje dle GPS vzdálenosti (haversine)."""
+    """Načte reálné inzeráty RD ze sreality.cz API.
 
-    # Velikostní rozsah: plocha ±40 % (min 40 m², max 400 m²)
-    size_min = max(40, int(floor_area_m2 * 0.6))
-    size_max = min(400, int(floor_area_m2 * 1.4))
+    Sreality GPS filtr (locality_gps_*) přestal fungovat – API ho ignoruje
+    a vrací domy z celé ČR. Proto VŽDY filtrujeme přes district_id.
+    GPS souřadnice používáme pouze pro výpočet vzdálenosti a řazení výsledků.
+    """
+
+    # Velikostní rozsah: plocha ±50 % (min 40 m², max 500 m²)
+    size_min = max(40, int(floor_area_m2 * 0.5))
+    size_max = min(500, int(floor_area_m2 * 1.5))
 
     params: dict = {
         "category_main_cb": 2,    # nemovitosti
@@ -242,13 +275,11 @@ async def _fetch_sreality_samples(
         "per_page": count,
         "sort": 0,
     }
-    if lat and lon:
-        params["locality_gps_lat"] = round(lat, 6)
-        params["locality_gps_lon"] = round(lon, 6)
-        # Sreality expects radius in METERS, not km
-        params["locality_gps_radius"] = max_km * 1000
-    elif district_id:
+
+    # ALWAYS use district_id — GPS params on Sreality API are broken (ignored)
+    if district_id:
         params["locality_district_id"] = district_id
+    # No GPS params — they don't work on Sreality anymore
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -312,12 +343,10 @@ async def _fetch_sreality_samples(
         gps_lat = gps.get("lat")
         gps_lon = gps.get("lon")
 
-        # ── BACKEND DISTANCE FILTER (haversine) – Sreality radius is unreliable ──
+        # Compute distance for sorting (no hard cutoff — district filter handles locality)
         distance_km = None
         if lat and lon and gps_lat and gps_lon:
             distance_km = _haversine_km(lat, lon, gps_lat, gps_lon)
-            if distance_km > max_km:
-                continue  # Skip samples beyond max distance
 
         results.append({
             "id": i,
@@ -428,6 +457,77 @@ class OdhadceAgent(BaseAgent):
         )
         self.client = LLMClient(model_name=model_name)
 
+    async def _fetch_nearby_samples(
+        self,
+        lat: float | None,
+        lon: float | None,
+        floor_area_m2: int,
+        district_id: int | None,
+        total_count: int = 20,
+    ) -> list[dict]:
+        """Prohledá okolní okresy v celém kraji a vrátí vzorky seřazené dle GPS vzdálenosti.
+
+        1. Najde všechny okresy ve stejném kraji (regionu)
+        2. Paralelně stáhne nabídky z každého okresu
+        3. Sloučí, deduplikuje (hash_id), seřadí dle vzdálenosti
+        4. Vrátí top `total_count` nejbližších vzorků
+        """
+        import asyncio
+
+        if not district_id:
+            # Bez okresu - fetch bez lokalizačního filtru
+            self.log("Bez okresu: hledám RD bez lokalizačního filtru...", "warn")
+            return await _fetch_sreality_samples(lat, lon, floor_area_m2, count=total_count)
+
+        # Najdi všechny okresy v tomto kraji
+        all_districts = _get_region_district_ids(district_id)
+        self.log(
+            f"Prohledávám {len(all_districts)} okresů v kraji "
+            f"(primární: {district_id}, celkem: {all_districts})...", "thinking"
+        )
+
+        # Paralelní fetch ze všech okresů (sem=3 aby se API nepřetížilo)
+        sem = asyncio.Semaphore(3)
+
+        async def _fetch_from_district(did: int, count: int) -> list[dict]:
+            async with sem:
+                return await _fetch_sreality_samples(
+                    lat, lon, floor_area_m2, district_id=did, count=count
+                )
+
+        tasks = []
+        for i, did in enumerate(all_districts):
+            # Primární okres → více výsledků, ostatní méně
+            count = 15 if i == 0 else 10
+            tasks.append(_fetch_from_district(did, count))
+
+        results_per_district = await asyncio.gather(*tasks)
+
+        # Sloučit a deduplikovat podle hash_id
+        seen_hashes: set = set()
+        merged: list[dict] = []
+        for samples in results_per_district:
+            for s in samples:
+                hid = s.get("hash_id")
+                if hid and hid in seen_hashes:
+                    continue
+                if hid:
+                    seen_hashes.add(hid)
+                merged.append(s)
+
+        # Seřadit dle GPS vzdálenosti (nejbližší první)
+        merged.sort(key=lambda x: x.get("distance_km") or 999)
+
+        # Přeřadit ID sekvenčně
+        for i, s in enumerate(merged, 1):
+            s["id"] = i
+
+        self.log(
+            f"Nalezeno {len(merged)} kandidátů z {len(all_districts)} okresů, "
+            f"vracím {min(len(merged), total_count)} nejbližších.", "info"
+        )
+        return merged[:total_count]
+
     async def run(self, context: dict) -> AgentResult:
         self.log("Zahajuji odhad obvyklé tržní ceny (NHZP)...", "info")
 
@@ -455,37 +555,29 @@ class OdhadceAgent(BaseAgent):
 
         floor_area_int = int(re.sub(r"[^0-9]", "", str(floor_area)) or "120") or 120
 
-        # ── Geokódování + DISTRICT_MAP fallback ──────────────────────────────
+        # ── Geokódování + DISTRICT_MAP ─────────────────────────────────────────
         self.log("Geokuduji adresu nemovitosti...", "thinking")
         coords = await _geocode_address(address)
-        district_id = None
+        district_id = _find_district_id(address)
 
-        if not coords:
-            self.log("GPS geokódování selhalo, zkouším okres z adresy...", "warn")
-            district_id = _find_district_id(address)
-            if district_id:
-                self.log(f"Nalezen okres (district_id={district_id}), hledám vzorky dle okresu.", "info")
-            else:
-                self.log("Nepodařilo se identifikovat okres z adresy.", "warn")
-
-        # ── Načti reálné vzorky ze sreality (GPS + velikost) ─────────────────
-        raw_samples: list[dict] = []
         if coords:
-            lat, lon = coords
-            for radius in (5, 10):
-                self.log(f"Hledám RD do {radius} km od {address}...", "thinking")
-                raw_samples = await _fetch_sreality_samples(
-                    lat, lon, floor_area_int,
-                    radius_km=radius, max_km=radius, count=20
-                )
-                if len(raw_samples) >= 5:
-                    break
-        elif district_id:
-            self.log(f"Hledám RD v okrese (fallback)...", "thinking")
-            raw_samples = await _fetch_sreality_samples(None, None, floor_area_int, district_id=district_id, count=20)
+            self.log(f"GPS lokalizace úspěšná: {coords[0]:.4f}, {coords[1]:.4f}", "info")
+        else:
+            self.log("GPS geokódování selhalo, použiji pouze okres.", "warn")
+
+        if district_id:
+            self.log(f"Nalezen okres (district_id={district_id}).", "info")
+        else:
+            self.log("Nepodařilo se identifikovat okres z adresy.", "warn")
+
+        # ── Načti reálné vzorky ze sreality (multi-district, řazené dle GPS) ──
+        lat, lon = coords if coords else (None, None)
+        raw_samples = await self._fetch_nearby_samples(
+            lat, lon, floor_area_int, district_id, total_count=20
+        )
 
         if len(raw_samples) < 3:
-            msg = "Pro zpracování online ocenění je v okruhu do 5 km od nemovitosti málo srovnatelných vzorků."
+            msg = "Pro zpracování online ocenění se nepodařilo najít dostatek srovnatelných vzorků."
             self.log(msg, "warn")
             return AgentResult(
                 status=AgentStatus.FAIL,
