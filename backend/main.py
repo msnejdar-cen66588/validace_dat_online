@@ -323,6 +323,7 @@ async def start_pipeline(
         raise HTTPException(status_code=404, detail="Session not found.")
 
     session = sessions[session_id]
+    session["model"] = model  # Store model for valuation endpoint
 
     # Create orchestrator
     orchestrator = PipelineOrchestrator(session_id, model_name=model)
@@ -411,10 +412,13 @@ async def get_pipeline_state(session_id: str):
 async def generate_valuation(
     session_id: str, 
     payload: dict = Body(None),
-    model: str = "gemini"
+    model: str = None
 ):
     """Run just the Valuation (Odhadce) agent to get comparative market estimation."""
     session = sessions.get(session_id, {})
+    
+    # Use the model from query param, or fall back to the session's model, or default to gpt-5.4-mini
+    effective_model = model or session.get("model") or "gpt-5.4-mini"
     
     # Use provided overrides if any
     custom_address = payload.get("adresa") if payload else None
@@ -436,7 +440,7 @@ async def generate_valuation(
         }
     }
     
-    agent = OdhadceAgent(model_name=model)
+    agent = OdhadceAgent(model_name=effective_model)
     result = await agent.run(context)
     
     # Store result optionally on session if needed

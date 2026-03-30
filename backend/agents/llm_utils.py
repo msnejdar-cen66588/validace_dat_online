@@ -62,17 +62,28 @@ class LLMClient:
         if not self.gemini_client:
             raise ValueError("Gemini client not initialized (check API key)")
 
-        # In google-genai, contents can be a list of parts or strings
-        # We assume the caller handles the specific Part/types formatting for now
-        # but we can also normalize it here if needed.
+        # Normalize content parts: convert generic image objects to Gemini Part objects
+        normalized = []
+        for part in contents:
+            if isinstance(part, str):
+                normalized.append(part)
+            elif hasattr(part, "inline_data"):
+                # Already a Gemini Part object
+                normalized.append(part)
+            elif hasattr(part, "data") and hasattr(part, "mime_type"):
+                # Generic image container — convert to Gemini Part
+                normalized.append(
+                    types.Part.from_bytes(data=part.data, mime_type=part.mime_type)
+                )
+            else:
+                normalized.append(str(part))
         
         # Determine the model string to use
-        # If model_name is just "gemini", use the default from config
         model = self.model_name if self.model_name != "gemini" else GEMINI_MODEL
 
         response = await self.gemini_client.aio.models.generate_content(
             model=model,
-            contents=contents,
+            contents=normalized,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 response_mime_type=response_mime_type,

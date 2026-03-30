@@ -15,7 +15,7 @@ import statistics
 import httpx
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
-from config import GEMINI_API_KEY, GEMINI_MODEL, UPLOAD_DIR
+from config import UPLOAD_DIR
 
 
 # ── Povinné rozsahy koeficientů (sdílené mezi sanitize i compute) ─────────────
@@ -527,8 +527,17 @@ class OdhadceAgent(BaseAgent):
             if not s["velikost_domu_m2"] or s["velikost_domu_m2"] <= 0:
                 s["velikost_domu_m2"] = floor_area_int
 
+        # Count enriched samples (for confidence scoring later)
+        enriched_count = sum(1 for s in raw_samples if s.get("stav"))
+
         # ── Příprava fotek oceňované nemovitosti pro AI ──────────────────────
-        from google.genai import types as genai_types
+        # Simple image container that LLMClient can handle for both Gemini and OpenAI
+        class _ImagePart:
+            """Lightweight image container compatible with LLMClient's content handling."""
+            def __init__(self, data: bytes, mime_type: str = "image/jpeg"):
+                self.data = data
+                self.mime_type = mime_type
+
         contents_parts: list = []
         images_data = context.get("images") or []
         photos_sent = 0
@@ -541,7 +550,7 @@ class OdhadceAgent(BaseAgent):
                     with open(img_path, "rb") as f:
                         img_bytes = f.read()
                     contents_parts.append(
-                        genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+                        _ImagePart(data=img_bytes, mime_type="image/jpeg")
                     )
                     photos_sent += 1
                 except Exception:
@@ -573,7 +582,7 @@ class OdhadceAgent(BaseAgent):
             if isinstance(photo_data, bytes) and photo_data:
                 contents_parts.append(f"Fotografie vzorku #{s['id']} ({s['adresa']}):")
                 contents_parts.append(
-                    genai_types.Part.from_bytes(data=photo_data, mime_type="image/jpeg")
+                    _ImagePart(data=photo_data, mime_type="image/jpeg")
                 )
                 sample_photos_sent += 1
 

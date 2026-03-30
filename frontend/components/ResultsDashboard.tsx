@@ -400,7 +400,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                     <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                         <button
                             className="btn btn-primary"
-                            style={{ background: '#3b82f6', fontSize: '16px', padding: '12px 24px', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center', gap: '8px' }}
+                            style={{ background: '#1428A0', fontSize: '16px', padding: '14px 28px', width: '100%', maxWidth: '420px', display: 'flex', justifyContent: 'center', gap: '8px', borderRadius: '12px', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer', boxShadow: '0 2px 12px rgba(20,40,160,0.2)' }}
                             onClick={openSetup}
                             disabled={isValuing}
                         >
@@ -413,43 +413,43 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
 
                 {/* ── Valuation Setup Form ── */}
                 {isSetupOpen && (
-                    <div className={styles.comparisonCard} style={{ marginTop: '24px', border: '2px solid #3b82f6', background: '#eff6ff', padding: '20px' }}>
-                        <h3 className={styles.comparisonTitle} style={{ color: '#1e3a8a', marginBottom: '16px' }}>⚙️ Nastavení parametrů pro ocenění</h3>
+                    <div className={styles.comparisonCard} style={{ marginTop: '24px', border: '2px solid #1428A0', background: '#f0f2ff', padding: '24px' }}>
+                        <h3 className={styles.comparisonTitle} style={{ color: '#1428A0', marginBottom: '16px' }}>⚙️ Nastavení parametrů pro ocenění</h3>
                         <p style={{ fontSize: '14px', color: '#475569', marginBottom: '16px' }}>Zkontrolujte a případně upravte vstupní údaje před odesláním umělé inteligenci pro srovnávací metodu.</p>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                 <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Cílová adresa:</label>
-                                <input type="text" value={setupData.adresa} onChange={(e) => setSetupData(p => ({ ...p, adresa: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                                <input type="text" value={setupData.adresa} onChange={(e) => setSetupData(p => ({ ...p, adresa: e.target.value }))} style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid #e8ecf1', fontSize: '14px', outline: 'none' }} />
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                     <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Užitná/Podlahová plocha (m²):</label>
-                                    <input type="text" value={setupData.plocha} onChange={(e) => setSetupData(p => ({ ...p, plocha: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                                    <input type="text" value={setupData.plocha} onChange={(e) => setSetupData(p => ({ ...p, plocha: e.target.value }))} style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid #e8ecf1', fontSize: '14px', outline: 'none' }} />
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                     <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Plocha pozemku (m²):</label>
-                                    <input type="text" value={setupData.pozemek} onChange={(e) => setSetupData(p => ({ ...p, pozemek: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                                    <input type="text" value={setupData.pozemek} onChange={(e) => setSetupData(p => ({ ...p, pozemek: e.target.value }))} style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid #e8ecf1', fontSize: '14px', outline: 'none' }} />
                                 </div>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                 <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Technický stav objektu:</label>
-                                <input type="text" value={setupData.stav} onChange={(e) => setSetupData(p => ({ ...p, stav: e.target.value }))} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                                <input type="text" value={setupData.stav} onChange={(e) => setSetupData(p => ({ ...p, stav: e.target.value }))} style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid #e8ecf1', fontSize: '14px', outline: 'none' }} />
                             </div>
                         </div>
 
                         <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                            <button className="btn btn-secondary" onClick={() => setIsSetupOpen(false)} style={{ padding: '10px 20px' }}>Zrušit</button>
-                            <button className="btn btn-primary" onClick={confirmSetup} style={{ padding: '10px 20px', background: '#3b82f6' }}>Spočítat NHZP</button>
+                            <button className="btn btn-secondary" onClick={() => setIsSetupOpen(false)} style={{ padding: '12px 24px', borderRadius: '10px' }}>Zrušit</button>
+                            <button className="btn btn-primary" onClick={confirmSetup} style={{ padding: '12px 24px', background: '#1428A0', borderRadius: '10px', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Spočítat NHZP</button>
                         </div>
                     </div>
                 )}
 
                 {/* ── Valuation Results ── */}
                 {valuation && valuation.details && (
-                    <div className={styles.comparisonCard} style={{ marginTop: '24px', border: '2px solid #3b82f6', background: '#eff6ff' }}>
+                    <div className={styles.comparisonCard} style={{ marginTop: '24px', border: '1px solid #d8deff', background: 'linear-gradient(135deg, #f5f7ff 0%, #ffffff 40%)' }}>
                         <div className={styles.comparisonHeader}>
-                            <h3 className={styles.comparisonTitle} style={{ color: '#1e3a8a' }}>
+                            <h3 className={styles.comparisonTitle} style={{ color: '#1428A0' }}>
                                 📊 Tržní odhad (NHZP)
                             </h3>
                         </div>
@@ -458,7 +458,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '32px', padding: '16px 0', flexWrap: 'wrap' }}>
                             <div style={{ textAlign: 'center', flex: '1 1 auto' }}>
                                 <div style={{ fontSize: '14px', color: '#475569', marginBottom: '4px' }}>Odhadovaná obvyklá cena</div>
-                                <div style={{ fontSize: '36px', fontWeight: 800, color: '#1e40af' }}>
+                                <div style={{ fontSize: '40px', fontWeight: 800, color: '#1428A0', letterSpacing: '-1px' }}>
                                     {adjustedNhzp.toLocaleString('cs-CZ')} Kč
                                 </div>
                                 {valuation.details.odhad_min && valuation.details.odhad_max && (
@@ -467,7 +467,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                     </div>
                                 )}
                                 {valuation.details.benchmark && (
-                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '8px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '20px', padding: '4px 14px', fontSize: '13px', color: '#166534' }}>
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '10px', background: '#ecfdf5', border: '1px solid #86efac', borderRadius: '100px', padding: '6px 16px', fontSize: '13px', color: '#166534', fontWeight: 600 }}>
                                         📍 Prům. cena v {valuation.details.benchmark.okres}: {valuation.details.benchmark.czk_per_m2.toLocaleString('cs-CZ')} Kč/m²
                                     </div>
                                 )}
@@ -514,7 +514,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                             const priced = acqTitles.filter((t: any) => t.price_czk > 0);
                             if (priced.length === 0) return null;
                             return (
-                                <div style={{ marginTop: '12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '12px 16px' }}>
+                                <div style={{ marginTop: '14px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '14px', padding: '14px 18px' }}>
                                     <div style={{ fontSize: '13px', fontWeight: 600, color: '#9a3412', marginBottom: '6px' }}>📜 Historické kupní ceny (z LV)</div>
                                     {priced.map((t: any, i: number) => (
                                         <div key={i} style={{ fontSize: '13px', color: '#78350f' }}>
@@ -539,16 +539,16 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                 {valuation.details.vzorky?.map((s: any) => {
                                     const currentCoeff = customCoeffs[s.id] !== undefined ? customCoeffs[s.id] : String(s.koeficient_podobnosti);
                                     return (
-                                        <div key={s.id} style={{ background: '#fff', padding: '16px', borderRadius: '12px', border: '1px solid #cbd5e1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div key={s.id} style={{ background: '#fff', padding: '20px', borderRadius: '16px', border: '1px solid #e8ecf1', display: 'flex', flexDirection: 'column', gap: '10px', boxShadow: '0 1px 8px rgba(20,40,160,0.04)' }}>
                                             {s.obrazek_url && (
-                                                <img src={s.obrazek_url} alt="Srovnávací vzorek" style={{ width: '100%', height: '220px', objectFit: 'cover', borderRadius: '8px', marginBottom: '8px' }} />
+                                                <img src={s.obrazek_url} alt="Srovnávací vzorek" style={{ width: '100%', height: '220px', objectFit: 'cover', borderRadius: '12px', marginBottom: '8px' }} />
                                             )}
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                                 <div>
                                                     <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                         {s.adresa}
                                                         {s.zdroj_url && (
-                                                            <a href={s.zdroj_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', fontWeight: 600, color: '#2563eb', textDecoration: 'none', background: '#eff6ff', padding: '2px 8px', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
+                                                            <a href={s.zdroj_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', fontWeight: 700, color: '#1428A0', textDecoration: 'none', background: '#eef1ff', padding: '3px 10px', borderRadius: '100px', border: '1px solid #c7d0ff' }}>
                                                                 Otevřít inzerát ↗
                                                             </a>
                                                         )}
@@ -567,10 +567,10 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                     )}
                                                 </div>
                                             </div>
-                                            <div style={{ fontSize: '13px', color: '#475569', background: '#f8fafc', padding: '8px', borderRadius: '6px' }}>
+                                            <div style={{ fontSize: '13px', color: '#475569', background: '#f8fafc', padding: '10px 14px', borderRadius: '10px' }}>
                                                 {s.oduvodneni_koeficientu}
                                             </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: '4px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: '6px', borderTop: '1px solid #e8ecf1', paddingTop: '14px' }}>
                                                 {['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'].map(k => {
                                                     const kData = customCoeffs[s.id] || s.koeficienty || {};
                                                     const currentCoeff = kData[k] !== undefined ? String(kData[k]) : '1';
@@ -581,7 +581,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                                 type="text"
                                                                 value={currentCoeff}
                                                                 onChange={(e) => handleCoeffChange(s.id, k, e.target.value)}
-                                                                style={{ width: '100%', padding: '4px 4px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'center' }}
+                                                                style={{ width: '100%', padding: '6px 4px', borderRadius: '8px', border: '1px solid #e8ecf1', fontSize: '13px', textAlign: 'center', outline: 'none' }}
                                                             />
                                                         </div>
                                                     );
