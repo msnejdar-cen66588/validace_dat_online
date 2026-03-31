@@ -45,11 +45,46 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const [processingPhase, setProcessingPhase] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [viewMode, setViewMode] = useState<'text' | 'original' | 'pdf'>('text');
+  const [panelWidth, setPanelWidth] = useState(380);
+  const [isResizing, setIsResizing] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const documentContentRef = useRef<HTMLDivElement>(null);
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   // Timer for processing loader
+  // Resize handler
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const delta = e.clientX - resizeRef.current.startX;
+      const newWidth = Math.max(280, Math.min(700, resizeRef.current.startWidth + delta));
+      setPanelWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      resizeRef.current = null;
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    resizeRef.current = { startX: e.clientX, startWidth: panelWidth };
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   useEffect(() => {
     if (step !== 'processing') return;
     const start = Date.now();
@@ -145,7 +180,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
             return updated;
           }
         }
-        return [...prev, entry];
+        return [entry, ...prev];
       });
 
       // Set highlights
@@ -459,7 +494,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
         </div>
 
         {/* Main content */}
-        <div className={styles.analysisLayout}>
+        <div className={styles.analysisLayout} style={{ gridTemplateColumns: `${panelWidth}px 6px 1fr` }}>
           {/* ─── Left: Query Panel ─── */}
           <div className={styles.queryPanel}>
             {/* Contract Summary */}
@@ -572,6 +607,16 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
             )}
 
             {error && <div className={styles.error}>{error}</div>}
+          </div>
+
+          {/* Resize Handle */}
+          <div
+            className={`${styles.resizeHandle} ${isResizing ? styles.resizeHandleActive : ''}`}
+            onMouseDown={startResize}
+          >
+            <div className={styles.resizeGrip}>
+              <span /><span /><span />
+            </div>
           </div>
 
           {/* ─── Right: Document Viewer ─── */}
