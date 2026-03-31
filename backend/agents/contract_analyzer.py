@@ -256,45 +256,48 @@ TEXT SMLOUVY:
         prompt = f"""Odpověz na dotaz uživatele ohledně této smlouvy.
 
 PRAVIDLA:
-1. Odpověz přesně a stručně na dotaz.
-2. Pokud nalezneš relevantní text, cituj PŘESNÝ úryvek textu ze smlouvy.
-3. Uveď číslo strany, kde se informace nachází.
-4. Pokud informaci nenajdeš, řekni to jasně.
+1. Prohledej CELOU smlouvu od začátku do konce.
+2. Odpověz přesně a stručně na dotaz. Uveď konkrétní čísla, částky, data, jména.
+3. Cituj PŘESNÝ úryvek textu ze smlouvy — DOSLOVA, znak po znaku, jak je napsán v dokumentu. Necituj parafrázovaně.
+4. Citace musí být dostatečně dlouhá (alespoň 30 znaků), aby šla jednoznačně najít v textu smlouvy.
+5. Uveď číslo strany, kde se informace nachází.
+6. Pokud informaci opravdu nenajdeš po prohledání celé smlouvy, řekni to jasně.
+7. V highlights uveď PŘESNÉ fráze z textu smlouvy, které se mají zvýraznit (doslovné citace, ne parafrázované).
 
 Odpověz jako JSON:
 {{
-    "answer": "Odpověď na dotaz",
+    "answer": "Odpověď na dotaz s konkrétními údaji",
     "found": true,
     "citations": [
         {{
-            "text": "Přesný citovaný text ze smlouvy (přesné znění, aby šlo najít ve smlouvě)",
-            "page": 1,
-            "context": "Okolní kontext citace pro lepší identifikaci"
+            "text": "PŘESNÝ doslovný úryvek ze smlouvy (min 30 znaků, max 200 znaků)",
+            "page": 1
         }}
     ],
     "highlights": [
-        "klíčové slovo nebo fráze k zvýraznění 1",
-        "klíčové slovo nebo fráze k zvýraznění 2"
+        "přesná fráze ze smlouvy k zvýraznění 1",
+        "přesná fráze ze smlouvy k zvýraznění 2"
     ]
 }}
 
 SMLOUVA:
-{pages_ref[:8000]}
+{pages_ref[:12000]}
 
 DOTAZ UŽIVATELE: {query}
 """
         try:
             response = await self.llm.generate_content(
                 system_instruction=(
-                    "Jsi právní AI asistent České spořitelny. "
-                    "Analyzuješ bankovní smlouvy a odpovídáš na dotazy. "
-                    "Vždy cituj přesný text ze smlouvy. "
+                    "Jsi právní AI asistent České spořitelny specializovaný na analýzu bankovních smluv. "
+                    "Vždy prohledáš CELÝ dokument a najdeš požadovanou informaci. "
+                    "Cituješ DOSLOVA text ze smlouvy — přesné znění včetně čísel, částek a interpunkce. "
+                    "NIKDY neparafrázuj citace. Citace musí jít najít v originálním textu smlouvy. "
                     "Odpovídej v češtině."
                 ),
                 contents=[prompt],
                 response_mime_type="application/json",
                 max_output_tokens=2048,
-                temperature=0.2,
+                temperature=0.1,
             )
             result = json.loads(response)
 
@@ -310,17 +313,53 @@ DOTAZ UŽIVATELE: {query}
 
                 if page_num < len(pages_text) and cited_text:
                     page_text = pages_text[page_num]
-                    # Find position of cited text in the page
-                    idx = page_text.lower().find(cited_text.lower()[:50])
-                    if idx >= 0:
-                        # Calculate approximate Y position based on text position ratio
-                        total_len = len(page_text)
-                        y_ratio = idx / total_len if total_len > 0 else 0
+                    
+                    # Multi-strategy search: try progressively shorter substrings
+                    found_idx = -1
+                    search_text = cited_text.strip()
+                    
+                    # Strategy 1: Full text match
+                    found_idx = page_text.lower().find(search_text.lower())
+                    
+                    # Strategy 2: Try first 80 chars
+                    if found_idx < 0 and len(search_text) > 80:
+                        found_idx = page_text.lower().find(search_text[:80].lower())
+                    
+                    # Strategy 3: Try first 40 chars
+                    if found_idx < 0 and len(search_text) > 40:
+                        found_idx = page_text.lower().find(search_text[:40].lower())
+                    
+                    # Strategy 4: Try key numbers/amounts from the citation
+                    if found_idx < 0:
+                        import re
+                        numbers = re.findall(r'[\d.,]+\s*(?:Kč|CZK|EUR|%)', search_text)
+                        for num in numbers:
+                            idx = page_text.find(num)
+                            if idx >= 0:
+                                found_idx = idx
+                                break
+                    
+                    # Strategy 5: Try significant words (3+ chars)
+                    if found_idx < 0:
+                        words = [w for w in search_text.split() if len(w) >= 5]
+                        for word in words[:3]:
+                            idx = page_text.lower().find(word.lower())
+                            if idx >= 0:
+                                found_idx = idx
+                                break
+                    
+                    if found_idx >= 0:
+                        # Calculate Y position based on LINE number for accurate visual mapping
+                        lines_before = page_text[:found_idx].count('\n')
+                        total_lines = max(page_text.count('\n'), 1)
+                        y_ratio = lines_before / total_lines if total_lines > 0 else 0
+                        # Clamp to reasonable range (5% - 95%)
+                        y_ratio = max(0.05, min(0.95, y_ratio))
+                        
                         highlight_positions.append({
                             "page": page_num,
                             "text": cited_text,
                             "y_ratio": round(y_ratio, 3),
-                            "context": citation.get("context", ""),
                         })
 
             return {

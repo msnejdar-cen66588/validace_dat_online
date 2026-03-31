@@ -195,10 +195,20 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
         setHighlightPositions(prev => [...prev, ...result.highlight_positions]);
       }
 
-      // Scroll to first highlight
-      if (result.highlight_positions.length > 0) {
-        scrollToHighlight(result.citations[0]?.text || result.highlights[0]);
-      }
+      // Auto-scroll to first highlight after DOM update
+      const firstCitation = result.citations[0]?.text || result.highlights[0];
+      const firstPosition = result.highlight_positions[0];
+      
+      // Give React time to re-render highlights, then scroll
+      setTimeout(() => {
+        if (viewMode === 'original' && firstPosition) {
+          // Scroll to highlight on original page image
+          scrollToOriginalHighlight(firstPosition.page, firstPosition.y_ratio);
+        } else if (firstCitation) {
+          scrollToHighlight(firstCitation);
+        }
+      }, 300);
+
     } catch (e: any) {
       setError(e.message || 'Chyba při dotazu.');
     } finally {
@@ -223,20 +233,54 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const scrollToHighlight = (text: string) => {
     if (!text || !documentContentRef.current) return;
 
-    setTimeout(() => {
-      const container = documentContentRef.current;
-      if (!container) return;
-
-      const marks = container.querySelectorAll('mark');
-      for (const mark of marks) {
-        if (mark.textContent && text.toLowerCase().includes(mark.textContent.toLowerCase().substring(0, 20))) {
+    const container = documentContentRef.current;
+    const marks = container.querySelectorAll('mark');
+    
+    // Strategy 1: Match by first 20 chars of mark content
+    for (const mark of marks) {
+      if (mark.textContent) {
+        const markText = mark.textContent.toLowerCase();
+        const searchText = text.toLowerCase();
+        
+        if (searchText.includes(markText.substring(0, 15)) || markText.includes(searchText.substring(0, 15))) {
           mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
           mark.classList.add(styles.highlightActive);
-          setTimeout(() => mark.classList.remove(styles.highlightActive), 3000);
-          break;
+          setTimeout(() => mark.classList.remove(styles.highlightActive), 4000);
+          return;
         }
       }
-    }, 100);
+    }
+    
+    // Strategy 2: If no mark found, try to find the text in the document itself
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let node;
+    const searchLower = text.toLowerCase().substring(0, 30);
+    while (node = walker.nextNode()) {
+      if (node.textContent && node.textContent.toLowerCase().includes(searchLower)) {
+        const parent = node.parentElement;
+        if (parent) {
+          parent.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        return;
+      }
+    }
+  };
+
+  const scrollToOriginalHighlight = (page: number, yRatio: number) => {
+    if (!documentContentRef.current) return;
+    
+    const pageContainer = documentContentRef.current.querySelector(`[data-page="${page}"]`);
+    if (pageContainer) {
+      const rect = pageContainer.getBoundingClientRect();
+      const containerRect = documentContentRef.current.getBoundingClientRect();
+      const scrollTop = documentContentRef.current.scrollTop;
+      const targetY = (pageContainer as HTMLElement).offsetTop + (rect.height * yRatio) - containerRect.height / 3;
+      
+      documentContentRef.current.scrollTo({
+        top: targetY,
+        behavior: 'smooth',
+      });
+    }
   };
 
   const handleCitationClick = (citationText: string, page: number) => {
@@ -244,7 +288,16 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
       if (!prev.includes(citationText)) return [...prev, citationText];
       return prev;
     });
-    scrollToHighlight(citationText);
+    
+    if (viewMode === 'original') {
+      // Find the matching highlight position for this citation
+      const pos = highlightPositions.find(p => p.text === citationText && p.page === page);
+      if (pos) {
+        scrollToOriginalHighlight(pos.page, pos.y_ratio);
+      }
+    } else {
+      setTimeout(() => scrollToHighlight(citationText), 200);
+    }
   };
 
   // ─── Render highlighted text ───
@@ -671,7 +724,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                         {contractData.total_pages > 1 && (
                           <div className={styles.originalPageLabel}>Strana {i + 1}</div>
                         )}
-                        <div className={styles.originalPageContainer}>
+                        <div className={styles.originalPageContainer} data-page={i}>
                           <img
                             src={getContractPageImageUrl(contractData.session_id, i)}
                             alt={`Strana ${i + 1}`}
