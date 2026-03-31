@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import styles from './ContractAnalyzer.module.css';
 import {
   uploadContract,
@@ -21,6 +21,14 @@ interface ContractAnalyzerProps {
   selectedModel: string;
 }
 
+// Processing steps for the loader
+const PROCESSING_STEPS = [
+  { key: 'uploading', icon: '📤', label: 'Nahrávání dokumentu', desc: 'Odesílání smlouvy na server' },
+  { key: 'ocr', icon: '🔍', label: 'Čtení dokumentu', desc: 'AI rozpoznává text ze smlouvy' },
+  { key: 'classifying', icon: '🤖', label: 'Klasifikace smlouvy', desc: 'Určování typu smlouvy a příprava předvoleb' },
+  { key: 'ready', icon: '✅', label: 'Analýza dokončena', desc: 'Smlouva je připravena k dotazování' },
+];
+
 export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProps) {
   const [step, setStep] = useState<'upload' | 'processing' | 'analysis'>('upload');
   const [files, setFiles] = useState<File[]>([]);
@@ -32,10 +40,22 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const [queryInput, setQueryInput] = useState('');
   const [queryLoading, setQueryLoading] = useState(false);
   const [highlightTexts, setHighlightTexts] = useState<string[]>([]);
-  const [activeHighlightPage, setActiveHighlightPage] = useState<number | null>(null);
+  const [processingPhase, setProcessingPhase] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const [viewMode, setViewMode] = useState<'text' | 'pdf'>('text');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const documentContentRef = useRef<HTMLDivElement>(null);
+
+  // Timer for processing loader
+  useEffect(() => {
+    if (step !== 'processing') return;
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [step]);
 
   // ─── File Handling ───
   const handleFiles = useCallback((newFiles: FileList | File[]) => {
@@ -67,9 +87,29 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
 
     setError(null);
     setStep('processing');
+    setProcessingPhase(0);
+    setElapsed(0);
 
     try {
+      // Phase 1: Uploading
+      setProcessingPhase(0);
+      
+      // Small delay to show uploading phase
+      await new Promise(r => setTimeout(r, 500));
+      
+      // Phase 2: OCR
+      setProcessingPhase(1);
+      
       const result = await uploadContract(files, selectedModel);
+      
+      // Phase 3: Classifying
+      setProcessingPhase(2);
+      await new Promise(r => setTimeout(r, 600));
+      
+      // Phase 4: Ready
+      setProcessingPhase(3);
+      await new Promise(r => setTimeout(r, 400));
+
       setContractData(result);
       setStep('analysis');
     } catch (e: any) {
@@ -94,7 +134,6 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
         result,
       };
 
-      // Add to results (replace if same preset)
       setQueryResults(prev => {
         if (presetId) {
           const existing = prev.findIndex(r => r.preset_id === presetId);
@@ -116,7 +155,6 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
 
       // Scroll to first highlight
       if (result.highlight_positions.length > 0) {
-        setActiveHighlightPage(result.highlight_positions[0].page);
         scrollToHighlight(result.citations[0]?.text || result.highlights[0]);
       }
     } catch (e: any) {
@@ -143,7 +181,6 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const scrollToHighlight = (text: string) => {
     if (!text || !documentContentRef.current) return;
 
-    // Find the highlighted span
     setTimeout(() => {
       const container = documentContentRef.current;
       if (!container) return;
@@ -152,8 +189,8 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
       for (const mark of marks) {
         if (mark.textContent && text.toLowerCase().includes(mark.textContent.toLowerCase().substring(0, 20))) {
           mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          mark.classList.add(styles.active);
-          setTimeout(() => mark.classList.remove(styles.active), 3000);
+          mark.classList.add(styles.highlightActive);
+          setTimeout(() => mark.classList.remove(styles.highlightActive), 3000);
           break;
         }
       }
@@ -161,12 +198,11 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   };
 
   const handleCitationClick = (citationText: string, page: number) => {
-    setActiveHighlightPage(page);
-    // Add this citation to highlights
     setHighlightTexts(prev => {
       if (!prev.includes(citationText)) return [...prev, citationText];
       return prev;
     });
+    setViewMode('text'); // Switch to text view to see highlights
     scrollToHighlight(citationText);
   };
 
@@ -178,7 +214,6 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
       let text = page.full_text;
       if (!text) return null;
 
-      // Create highlighted version
       let segments: { text: string; highlighted: boolean }[] = [{ text, highlighted: false }];
 
       if (highlightTexts.length > 0) {
@@ -190,7 +225,6 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
               newSegments.push(seg);
               continue;
             }
-            // Try to find the highlight text (case insensitive, first 40 chars for matching)
             const searchText = ht.substring(0, 60);
             const idx = seg.text.toLowerCase().indexOf(searchText.toLowerCase());
             if (idx >= 0) {
@@ -235,137 +269,205 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
     setContractData(null);
     setQueryResults([]);
     setHighlightTexts([]);
-    setActiveHighlightPage(null);
     setError(null);
     setQueryInput('');
+    setViewMode('text');
+    setProcessingPhase(0);
+    setElapsed(0);
   };
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER
+  // RENDER: Upload Step (inside tab)
   // ═══════════════════════════════════════════════════════════════════
-
-  // ─── Upload Step ───
   if (step === 'upload') {
     return (
-      <div className={styles.container}>
-        <div className={styles.uploadSection}>
-          <p className={styles.uploadSubtitle}>
-            Nahrajte bankovní smlouvu — AI analyzuje obsah a najde klíčové informace
+      <div className={styles.uploadSection}>
+        <p className={styles.uploadSubtitle}>
+          Nahrajte bankovní smlouvu — AI analyzuje obsah a najde klíčové informace
+        </p>
+
+        <div
+          className={`${styles.dropZone} ${dragActive ? styles.dropZoneActive : ''}`}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,.pdf,application/pdf,image/jpeg,image/png,image/heic,image/heif,image/webp,image/tiff,image/bmp"
+            onChange={(e) => e.target.files && handleFiles(e.target.files)}
+            className={styles.fileInput}
+          />
+          <div className={styles.dropIcon}>
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <path d="M17 2H7C6.45 2 6 2.45 6 3V25C6 25.55 6.45 26 7 26H21C21.55 26 22 25.55 22 25V7L17 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M17 2V7H22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M10 17H18M14 13V21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <p className={styles.dropText}>
+            {dragActive ? 'Přetáhněte sem' : 'Přetáhněte smlouvu nebo klikněte pro výběr'}
           </p>
+          <p className={styles.dropHint}>PDF, fotky (JPG, PNG, HEIC) • Podporuje i špatně vyfocené dokumenty</p>
+        </div>
 
-          <div
-            className={`${styles.dropZone} ${dragActive ? styles.dropZoneActive : ''}`}
-            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
+        {files.length > 0 && (
+          <div className={styles.fileList}>
+            {files.map((file, i) => (
+              <div key={i} className={styles.fileChip}>
+                <span className={styles.fileChipIcon}>
+                  {file.name.toLowerCase().endsWith('.pdf') ? '📄' : '📷'}
+                </span>
+                <span>{file.name}</span>
+                <button className={styles.fileChipRemove} onClick={(e) => { e.stopPropagation(); removeFile(i); }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && <div className={styles.error}>{error}</div>}
+
+        <div className={styles.uploadActions}>
+          <button
+            className="btn btn-primary"
+            onClick={handleUpload}
+            disabled={files.length === 0}
+            style={{ padding: '14px 36px', fontSize: '15px' }}
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*,.pdf,application/pdf,image/jpeg,image/png,image/heic,image/heif,image/webp,image/tiff,image/bmp"
-              onChange={(e) => e.target.files && handleFiles(e.target.files)}
-              className={styles.fileInput}
-            />
-            <div className={styles.dropIcon}>
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                <path d="M17 2H7C6.45 2 6 2.45 6 3V25C6 25.55 6.45 26 7 26H21C21.55 26 22 25.55 22 25V7L17 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M17 2V7H22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M10 17H18M14 13V21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <p className={styles.dropText}>
-              {dragActive ? 'Přetáhněte sem' : 'Přetáhněte smlouvu nebo klikněte pro výběr'}
-            </p>
-            <p className={styles.dropHint}>PDF, fotky (JPG, PNG, HEIC) • Podporuje i špatně vyfocené dokumenty</p>
-          </div>
-
-          {files.length > 0 && (
-            <div className={styles.fileList}>
-              {files.map((file, i) => (
-                <div key={i} className={styles.fileChip}>
-                  <span className={styles.fileChipIcon}>
-                    {file.name.toLowerCase().endsWith('.pdf') ? '📄' : '📷'}
-                  </span>
-                  <span>{file.name}</span>
-                  <button className={styles.fileChipRemove} onClick={(e) => { e.stopPropagation(); removeFile(i); }}>✕</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {error && <div className={styles.error}>{error}</div>}
-
-          <div className={styles.uploadActions}>
-            <button
-              className="btn btn-primary"
-              onClick={handleUpload}
-              disabled={files.length === 0}
-              style={{ padding: '14px 36px', fontSize: '15px' }}
-            >
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M9 2V16M3 9H15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-              Analyzovat smlouvu
-            </button>
-          </div>
+            Analyzovat smlouvu
+          </button>
         </div>
       </div>
     );
   }
 
-  // ─── Processing Step ───
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER: Processing Step (fullscreen loader like ProcessingLoader)
+  // ═══════════════════════════════════════════════════════════════════
   if (step === 'processing') {
     return (
-      <div className={styles.container}>
-        <div className={styles.processingOverlay}>
-          <div className={styles.processingSpinner} />
-          <h3 className={styles.processingTitle}>Analyzuji smlouvu...</h3>
-          <p className={styles.processingSubtitle}>
-            AI čte dokument, rozpoznává typ smlouvy a připravuje předvolby
+      <div className={styles.loaderOverlay}>
+        <div className={styles.loaderContent}>
+          {/* Animated ring */}
+          <div className={styles.ringContainer}>
+            <div className={styles.ringOuter} />
+            <svg className={styles.ringSvg} viewBox="0 0 160 160">
+              <defs>
+                <linearGradient id="contractLoaderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#2870ED" />
+                  <stop offset="50%" stopColor="#1A5FD9" />
+                  <stop offset="100%" stopColor="#0D3B78" />
+                </linearGradient>
+              </defs>
+              <circle className={styles.ringTrack} cx="80" cy="80" r="70" />
+              <circle className={styles.ringArc} cx="80" cy="80" r="70" />
+            </svg>
+            <div className={styles.ringIcon}>
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                <path d="M8 4H20L26 10V28H8C6.9 28 6 27.1 6 26V6C6 4.9 6.9 4 8 4Z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M20 4V10H26" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 18H22M12 22H18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </div>
+          </div>
+
+          <h2 className={styles.loaderTitle}>
+            Analyzuji smlouvu
+            <span className={styles.loaderDots}>
+              <span>.</span><span>.</span><span>.</span>
+            </span>
+          </h2>
+          <p className={styles.loaderSubtitle}>
+            AI čte dokument a připravuje inteligentní analýzu
           </p>
+
+          {/* Step indicators */}
+          <div className={styles.loaderSteps}>
+            {PROCESSING_STEPS.map((s, idx) => {
+              const isActive = idx === processingPhase;
+              const isDone = idx < processingPhase;
+              return (
+                <div
+                  key={s.key}
+                  className={`${styles.loaderStepItem} ${isActive ? styles.loaderStepActive : ''} ${isDone ? styles.loaderStepDone : ''}`}
+                >
+                  <div className={styles.loaderStepIcon}>{s.icon}</div>
+                  <div className={styles.loaderStepText}>
+                    <span className={styles.loaderStepLabel}>{s.label}</span>
+                    <span className={styles.loaderStepDesc}>{s.desc}</span>
+                  </div>
+                  {isActive && <div className={styles.loaderStepSpinner} />}
+                  {isDone && (
+                    <svg className={styles.loaderStepCheck} viewBox="0 0 20 20" fill="none">
+                      <circle cx="10" cy="10" r="9" fill="rgba(5,150,105,0.15)" />
+                      <path d="M6 10.5L8.5 13L14 7" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className={styles.loaderTip}>
+            <span>⏱️</span>
+            Analýza obvykle trvá 15–45 sekund • {elapsed}s
+          </div>
         </div>
       </div>
     );
   }
 
-  // ─── Analysis Step ───
+  // ═══════════════════════════════════════════════════════════════════
+  // RENDER: Analysis Step (full-width new page)
+  // ═══════════════════════════════════════════════════════════════════
   if (step === 'analysis' && contractData) {
     const classification = contractData.classification;
 
     return (
-      <div className={styles.container}>
-        <button className={styles.backBtn} onClick={handleReset}>
-          ← Nová smlouva
-        </button>
+      <div className={styles.analysisPage}>
+        {/* Top bar */}
+        <div className={styles.analysisTopBar}>
+          <button className={styles.backBtn} onClick={handleReset}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Nová smlouva
+          </button>
+          <div className={styles.analysisTopBarInfo}>
+            <span className={styles.analysisTopBarIcon}>{classification.icon}</span>
+            <span className={styles.analysisTopBarTitle}>{classification.title}</span>
+            <span className={styles.analysisTopBarConfidence}>
+              {Math.round(classification.confidence * 100)}%
+            </span>
+          </div>
+          <div className={styles.analysisTopBarFileName}>
+            📄 {contractData.filename}
+            <span className={styles.analysisTopBarPages}>
+              ({contractData.total_pages} {contractData.total_pages === 1 ? 'strana' : contractData.total_pages < 5 ? 'strany' : 'stran'})
+            </span>
+          </div>
+        </div>
 
+        {/* Main content */}
         <div className={styles.analysisLayout}>
           {/* ─── Left: Query Panel ─── */}
           <div className={styles.queryPanel}>
-            {/* Contract Type Info */}
-            <div className={styles.contractInfoCard}>
-              <div className={styles.contractType}>
-                <div className={styles.contractTypeIcon}>{classification.icon}</div>
-                <div>
-                  <div className={styles.contractTypeName}>{classification.title}</div>
-                  <div className={styles.contractTypeConfidence}>
-                    <span className={`${styles.confidenceDot} ${classification.confidence < 0.7 ? styles.confidenceDotMedium : ''}`} />
-                    {Math.round(classification.confidence * 100)}% jistota
-                  </div>
-                </div>
-              </div>
-              {classification.summary && (
+            {/* Contract Summary */}
+            {classification.summary && (
+              <div className={styles.contractInfoCard}>
                 <div className={styles.contractSummary}>{classification.summary}</div>
-              )}
-              {classification.parties.length > 0 && (
-                <div className={styles.contractParties}>
-                  {classification.parties.map((party, i) => (
-                    <span key={i} className={styles.partyChip}>{party}</span>
-                  ))}
-                </div>
-              )}
-            </div>
+                {classification.parties.length > 0 && (
+                  <div className={styles.contractParties}>
+                    {classification.parties.map((party, i) => (
+                      <span key={i} className={styles.partyChip}>{party}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Quick Presets */}
             <div className={styles.presetsCard}>
@@ -380,7 +482,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                   return (
                     <button
                       key={preset.id}
-                      className={`${styles.presetBtn} ${hasResult ? styles.active : ''} ${isLoading ? styles.loading : ''}`}
+                      className={`${styles.presetBtn} ${hasResult ? styles.presetBtnActive : ''} ${isLoading ? styles.presetBtnLoading : ''}`}
                       onClick={() => handlePresetClick(preset)}
                       disabled={queryLoading}
                     >
@@ -396,7 +498,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
             <div className={styles.queryCard}>
               <div className={styles.queryTitle}>
                 <span>🔍</span>
-                Vlastní dotaz nad smlouvou
+                Vlastní dotaz
               </div>
               <form onSubmit={handleCustomQuery} className={styles.queryInputWrapper}>
                 <input
@@ -451,7 +553,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                         className={styles.resultCitation}
                         onClick={() => handleCitationClick(citation.text, citation.page - 1)}
                       >
-                        {"„"}{citation.text}{"“"}
+                        {`„${citation.text}"`}
                         <div className={styles.resultCitationPage}>
                           📍 Strana {citation.page} — klikněte pro zobrazení
                         </div>
@@ -468,9 +570,22 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
           {/* ─── Right: Document Viewer ─── */}
           <div className={styles.documentPanel}>
             <div className={styles.documentHeader}>
-              <div className={styles.documentTitle}>
-                <span className={styles.documentTitleIcon}>📄</span>
-                {contractData.filename}
+              {/* View mode toggle */}
+              <div className={styles.viewToggle}>
+                <button
+                  className={`${styles.viewToggleBtn} ${viewMode === 'text' ? styles.viewToggleBtnActive : ''}`}
+                  onClick={() => setViewMode('text')}
+                >
+                  📝 Přepis
+                </button>
+                {contractData.has_pdf && (
+                  <button
+                    className={`${styles.viewToggleBtn} ${viewMode === 'pdf' ? styles.viewToggleBtnActive : ''}`}
+                    onClick={() => setViewMode('pdf')}
+                  >
+                    📄 Náhled PDF
+                  </button>
+                )}
               </div>
               <span className={styles.documentPageInfo}>
                 {contractData.total_pages} {contractData.total_pages === 1 ? 'strana' : contractData.total_pages < 5 ? 'strany' : 'stran'}
@@ -478,9 +593,17 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
             </div>
 
             <div className={styles.documentContent} ref={documentContentRef}>
-              <div className={styles.documentText}>
-                {renderHighlightedText}
-              </div>
+              {viewMode === 'text' ? (
+                <div className={styles.documentText}>
+                  {renderHighlightedText}
+                </div>
+              ) : (
+                <iframe
+                  src={getContractPdfUrl(contractData.session_id)}
+                  className={styles.pdfViewer}
+                  title="Contract PDF"
+                />
+              )}
             </div>
           </div>
         </div>
