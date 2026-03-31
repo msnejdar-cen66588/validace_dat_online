@@ -581,6 +581,13 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                 <div className={styles.resultsTitle}>
                   <span>📋</span>
                   Nalezené informace ({queryResults.length})
+                  <button
+                    className={styles.clearResultsBtn}
+                    onClick={() => { setQueryResults([]); setHighlightTexts([]); setHighlightPositions([]); }}
+                    title="Smazat historii"
+                  >
+                    🗑️ Smazat
+                  </button>
                 </div>
                 {queryResults.map((qr, idx) => (
                   <div key={idx} className={styles.resultItem}>
