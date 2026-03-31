@@ -883,6 +883,94 @@
   border: none;
 }
 
+/* ─── Original Page View ─── */
+.originalPages {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  align-items: center;
+}
+
+.originalPageWrapper {
+  width: 100%;
+  max-width: 800px;
+}
+
+.originalPageLabel {
+  text-align: center;
+  padding: 8px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-blue);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 12px;
+}
+
+.originalPageContainer {
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  background: white;
+}
+
+.originalPageImage {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.originalHighlight {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  pointer-events: none;
+  animation: highlightFadeIn 0.5s ease;
+  z-index: 5;
+}
+
+@keyframes highlightFadeIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.originalHighlightBar {
+  width: 4px;
+  min-height: 28px;
+  background: var(--accent-blue);
+  border-radius: 0 2px 2px 0;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px rgba(40, 112, 237, 0.4);
+}
+
+.originalHighlightText {
+  padding: 4px 10px;
+  background: rgba(40, 112, 237, 0.9);
+  color: white;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 500;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  max-width: 300px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.originalNoHighlights {
+  text-align: center;
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
 
 /* ─── Scrollbars ─── */
 .documentContent::-webkit-scrollbar,

@@ -5,6 +5,7 @@ import {
   uploadContract,
   queryContract,
   getContractPdfUrl,
+  getContractPageImageUrl,
   API_BASE,
   type ContractUploadResponse,
   type ContractQueryResult,
@@ -40,9 +41,10 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const [queryInput, setQueryInput] = useState('');
   const [queryLoading, setQueryLoading] = useState(false);
   const [highlightTexts, setHighlightTexts] = useState<string[]>([]);
+  const [highlightPositions, setHighlightPositions] = useState<{page: number; text: string; y_ratio: number}[]>([]);
   const [processingPhase, setProcessingPhase] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  const [viewMode, setViewMode] = useState<'text' | 'pdf'>('text');
+  const [viewMode, setViewMode] = useState<'text' | 'original' | 'pdf'>('text');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const documentContentRef = useRef<HTMLDivElement>(null);
@@ -153,6 +155,11 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
       ];
       setHighlightTexts(allHighlights);
 
+      // Store highlight positions for original view
+      if (result.highlight_positions.length > 0) {
+        setHighlightPositions(prev => [...prev, ...result.highlight_positions]);
+      }
+
       // Scroll to first highlight
       if (result.highlight_positions.length > 0) {
         scrollToHighlight(result.citations[0]?.text || result.highlights[0]);
@@ -202,7 +209,6 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
       if (!prev.includes(citationText)) return [...prev, citationText];
       return prev;
     });
-    setViewMode('text'); // Switch to text view to see highlights
     scrollToHighlight(citationText);
   };
 
@@ -269,6 +275,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
     setContractData(null);
     setQueryResults([]);
     setHighlightTexts([]);
+    setHighlightPositions([]);
     setError(null);
     setQueryInput('');
     setViewMode('text');
@@ -578,6 +585,12 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                 >
                   📝 Přepis
                 </button>
+                <button
+                  className={`${styles.viewToggleBtn} ${viewMode === 'original' ? styles.viewToggleBtnActive : ''}`}
+                  onClick={() => setViewMode('original')}
+                >
+                  🖼️ Originál
+                </button>
                 {contractData.has_pdf && (
                   <button
                     className={`${styles.viewToggleBtn} ${viewMode === 'pdf' ? styles.viewToggleBtnActive : ''}`}
@@ -596,6 +609,50 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
               {viewMode === 'text' ? (
                 <div className={styles.documentText}>
                   {renderHighlightedText}
+                </div>
+              ) : viewMode === 'original' ? (
+                <div className={styles.originalPages}>
+                  {Array.from({ length: contractData.total_pages }, (_, i) => {
+                    const pageHighlights = highlightPositions.filter(h => h.page === i);
+                    return (
+                      <div key={i} className={styles.originalPageWrapper}>
+                        {contractData.total_pages > 1 && (
+                          <div className={styles.originalPageLabel}>Strana {i + 1}</div>
+                        )}
+                        <div className={styles.originalPageContainer}>
+                          <img
+                            src={getContractPageImageUrl(contractData.session_id, i)}
+                            alt={`Strana ${i + 1}`}
+                            className={styles.originalPageImage}
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                          {/* Highlight overlays */}
+                          {pageHighlights.map((hp, hIdx) => (
+                            <div
+                              key={hIdx}
+                              className={styles.originalHighlight}
+                              style={{
+                                top: `${hp.y_ratio * 100}%`,
+                              }}
+                              title={hp.text}
+                            >
+                              <div className={styles.originalHighlightBar} />
+                              <div className={styles.originalHighlightText}>
+                                {hp.text.substring(0, 80)}{hp.text.length > 80 ? '...' : ''}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {highlightPositions.length === 0 && queryResults.length > 0 && (
+                    <div className={styles.originalNoHighlights}>
+                      💡 Klikněte na citaci vlevo pro zobrazení zvýraznění
+                    </div>
+                  )}
                 </div>
               ) : (
                 <iframe

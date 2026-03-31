@@ -423,3 +423,6 @@ export function getContractPdfUrl(sessionId: string): string {
     return `${API_BASE}/api/contract/pdf/${sessionId}`;
 }
 
+export function getContractPageImageUrl(sessionId: string, pageNum: number): string {
+    return `${API_BASE}/api/contract/page-image/${sessionId}/${pageNum}`;
+}
