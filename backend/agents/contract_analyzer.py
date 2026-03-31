@@ -123,6 +123,8 @@ class ContractAnalyzerAgent:
 
         contents = []
         contents.append(
+            "DŮLEŽITÉ: Vypiš POUZE text ze smlouvy. NEPŘIDÁVEJ žádný vlastní komentář, úvod ani vysvětlení. "
+            "Začni ROVNOU textem smlouvy. Žádné 'Dobře, zde je přepis...' ani nic podobného.\n\n"
             "Přepiš VEŠKERÝ text z těchto obrázků smlouvy. "
             "Zachovej přesně původní formátování, čísla paragrafů, odstavce. "
             "Pokud je text špatně čitelný, přepiš co nejpřesněji. "
@@ -146,8 +148,9 @@ class ContractAnalyzerAgent:
         try:
             text = await self.llm.generate_content(
                 system_instruction=(
-                    "Jsi expertní OCR systém specializovaný na české právní dokumenty a smlouvy. "
-                    "Přepisuješ text z fotografií a skenů s maximální přesností. "
+                    "Jsi OCR systém. Tvůj výstup obsahuje VÝHRADNĚ přepsaný text z obrázků. "
+                    "NIKDY nepřidávej vlastní komentáře, úvody, vysvětlení ani shrnutí. "
+                    "Začni ROVNOU prvním slovem z dokumentu. "
                     "Zachováváš formátování, čísla paragrafů, odstavce a strukturu dokumentu."
                 ),
                 contents=contents,
