@@ -160,8 +160,8 @@ class ContractAnalyzerAgent:
             return ""
 
     async def classify_contract(self, text: str) -> dict:
-        """Classify the type of contract and return type + presets."""
-        prompt = f"""Analyzuj následující text smlouvy a urči její typ.
+        """Classify the type of contract and return type + AI-generated presets."""
+        prompt = f"""Analyzuj následující text smlouvy. Urči její typ a vygeneruj nejdůležitější předvolby pro vyhledávání.
 
 Typy smluv:
 - kupni_smlouva (kupní smlouva na nemovitost)
@@ -172,13 +172,24 @@ Typy smluv:
 - smlouva_budouci (smlouva o smlouvě budoucí)
 - unknown (pokud nelze určit)
 
+INSTRUKCE PRO PŘEDVOLBY:
+- Vygeneruj 8-12 nejdůležitějších věcí, které by banka/uživatel chtěl z TÉTO KONKRÉTNÍ smlouvy zjistit.
+- Seřaď od nejdůležitějších po méně důležité.
+- Každá předvolba musí mít unikátní ID, krátký popisek a přesný dotaz.
+- Přizpůsob předvolby obsahu smlouvy — pokud smlouva zmiňuje specifické věci (věcná břemena, splátky, pokuty, atd.), přidej pro ně předvolby.
+- Popisky musí být krátké (1-3 slova), dotazy konkrétní.
+
 Odpověz POUZE jako JSON:
 {{
     "contract_type": "typ_smlouvy",
     "confidence": 0.95,
     "title": "Lidský název smlouvy",
     "summary": "Stručný popis obsahu smlouvy (1-2 věty)",
-    "parties": ["Strana 1", "Strana 2"]
+    "parties": ["Strana 1", "Strana 2"],
+    "presets": [
+        {{"id": "unikatni_id", "label": "Krátký popisek", "query": "Konkrétní dotaz k vyhledání ve smlouvě"}},
+        ...
+    ]
 }}
 
 TEXT SMLOUVY:
@@ -188,18 +199,25 @@ TEXT SMLOUVY:
             response = await self.llm.generate_content(
                 system_instruction=(
                     "Jsi právní AI specialista na české bankovní smlouvy. "
-                    "Klasifikuješ typ smlouvy a vracíš strukturovaný JSON."
+                    "Klasifikuješ typ smlouvy a generuješ inteligentní předvolby "
+                    "přizpůsobené obsahu konkrétní smlouvy. "
+                    "Předvolby musí pokrývat to nejdůležitější, co by banka chtěla vědět."
                 ),
                 contents=[prompt],
                 response_mime_type="application/json",
-                max_output_tokens=500,
-                temperature=0.1,
+                max_output_tokens=1500,
+                temperature=0.2,
             )
             result = json.loads(response)
             contract_type = result.get("contract_type", "unknown")
 
-            # Get presets for this type
+            # Get icon and label from static config
             preset_config = CONTRACT_PRESETS.get(contract_type, CONTRACT_PRESETS["unknown"])
+
+            # Use AI-generated presets, fall back to static ones if empty
+            ai_presets = result.get("presets", [])
+            if not ai_presets or len(ai_presets) < 3:
+                ai_presets = preset_config["presets"]
 
             return {
                 "contract_type": contract_type,
@@ -209,7 +227,7 @@ TEXT SMLOUVY:
                 "parties": result.get("parties", []),
                 "icon": preset_config["icon"],
                 "label": preset_config["label"],
-                "presets": preset_config["presets"],
+                "presets": ai_presets,
             }
         except Exception as e:
             print(f"[ContractAnalyzer] Classification error: {e}")
