@@ -7,6 +7,7 @@ import ResultsDashboard from '@/components/ResultsDashboard';
 import ProcessingLoader from '@/components/ProcessingLoader';
 import AppInfo from '@/components/AppInfo';
 import BatchDashboard from '@/components/BatchDashboard';
+import ContractAnalyzer from '@/components/ContractAnalyzer';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useBatchWebSocket } from '@/hooks/useBatchWebSocket';
 
@@ -77,7 +78,7 @@ export default function Home() {
   const lvInputRef = useRef<HTMLInputElement>(null);
 
   // Batch mode state
-  const [mode, setMode] = useState<'single' | 'batch'>('single');
+  const [mode, setMode] = useState<'single' | 'batch' | 'contract'>('single');
   const [batchId, setBatchId] = useState<string | null>(null);
   const [batchCases, setBatchCases] = useState<BatchCase[]>([]);
   const [batchUploading, setBatchUploading] = useState(false);
@@ -401,10 +402,17 @@ export default function Home() {
         {step === 'upload' && (
           <section className={styles.uploadSection}>
             <div className={styles.uploadContainer}>
-              <h2 className={styles.sectionTitle}>
-                <span className={styles.titleGradient}>Nahrajte fotografie</span>
-                <span className={styles.titleSub}>rodinných domů</span>
-              </h2>
+              {mode !== 'contract' ? (
+                <h2 className={styles.sectionTitle}>
+                  <span className={styles.titleGradient}>Nahrajte fotografie</span>
+                  <span className={styles.titleSub}>rodinných domů</span>
+                </h2>
+              ) : (
+                <h2 className={styles.sectionTitle}>
+                  <span className={styles.titleGradient}>Analýza smluv</span>
+                  <span className={styles.titleSub}>AI agent pro extrakci dat</span>
+                </h2>
+              )}
 
               {/* Mode Toggle */}
               <div className={styles.modeToggle}>
@@ -413,6 +421,9 @@ export default function Home() {
                 </button>
                 <button className={`${styles.modeBtn} ${mode === 'batch' ? styles.modeBtnActive : ''}`} onClick={() => setMode('batch')}>
                   📁 Hromadná kontrola
+                </button>
+                <button className={`${styles.modeBtn} ${mode === 'contract' ? styles.modeBtnActive : ''}`} onClick={() => setMode('contract')}>
+                  📄 Analýza smluv
                 </button>
               </div>
 
@@ -879,6 +890,11 @@ export default function Home() {
               </div>
               {error && <div className={styles.error}>{error}</div>}
             </div>
+          )}
+
+          {/* Contract Analysis Mode */}
+          {mode === 'contract' && (
+            <ContractAnalyzer selectedModel={selectedModel} />
           )}
           </div>
         </section>

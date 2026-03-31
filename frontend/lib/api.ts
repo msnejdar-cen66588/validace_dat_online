@@ -320,3 +320,106 @@ export function getBatchWebSocketUrl(batchId: string): string {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
     return `ws://${host}:8000/ws/batch/${batchId}`;
 }
+
+
+// ── Contract Analysis ────────────────────────────────────────────────────
+
+export interface ContractPreset {
+    id: string;
+    label: string;
+    query: string;
+}
+
+export interface ContractClassification {
+    contract_type: string;
+    confidence: number;
+    title: string;
+    summary: string;
+    parties: string[];
+    icon: string;
+    label: string;
+    presets: ContractPreset[];
+}
+
+export interface ContractPage {
+    page_number: number;
+    full_text: string;
+    blocks: {
+        text: string;
+        page: number;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        confidence: number;
+    }[];
+    has_image: boolean;
+    width: number;
+    height: number;
+}
+
+export interface ContractUploadResponse {
+    session_id: string;
+    filename: string;
+    total_pages: number;
+    full_text: string;
+    pages: ContractPage[];
+    classification: ContractClassification;
+    has_pdf: boolean;
+    page_image_urls: string[];
+}
+
+export interface ContractQueryResult {
+    answer: string;
+    found: boolean;
+    citations: {
+        text: string;
+        page: number;
+        context: string;
+    }[];
+    highlights: string[];
+    highlight_positions: {
+        page: number;
+        text: string;
+        y_ratio: number;
+        context: string;
+    }[];
+}
+
+export async function uploadContract(files: File[], model: string = "gpt-5.4-mini"): Promise<ContractUploadResponse> {
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    formData.append('model', model);
+
+    const res = await fetch(`${API_BASE}/api/contract/upload`, {
+        method: 'POST',
+        body: formData,
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(err.detail || 'Nahrávání smlouvy selhalo');
+    }
+
+    return res.json();
+}
+
+export async function queryContract(sessionId: string, query: string, model?: string): Promise<ContractQueryResult> {
+    const res = await fetch(`${API_BASE}/api/contract/query/${sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, model }),
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Query failed' }));
+        throw new Error(err.detail || 'Dotaz selhal');
+    }
+
+    return res.json();
+}
+
+export function getContractPdfUrl(sessionId: string): string {
+    return `${API_BASE}/api/contract/pdf/${sessionId}`;
+}
+

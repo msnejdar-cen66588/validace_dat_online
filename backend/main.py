@@ -25,6 +25,8 @@ from report_generator import ReportGenerator
 from batch_processor import (
     BatchSession, group_files_by_subfolder, prepare_batch_cases, run_batch,
 )
+from contract_ocr import process_contract_pdf, process_contract_images
+from agents.contract_analyzer import ContractAnalyzerAgent
 
 app = FastAPI(
     title="AI Validation Pipeline – Rodinné Domy",
@@ -50,6 +52,9 @@ global_websockets: dict[str, list[WebSocket]] = {}
 # Batch session store
 batch_sessions: dict[str, BatchSession] = {}
 batch_websockets: dict[str, list[WebSocket]] = {}
+
+# Contract analysis session store
+contract_sessions: dict[str, dict] = {}
 
 
 @app.get("/api/health")
@@ -701,6 +706,158 @@ async def batch_websocket_endpoint(websocket: WebSocket, batch_id: str):
             batch_websockets[batch_id].remove(websocket)
         if batch and websocket in batch.active_connections:
             batch.active_connections.remove(websocket)
+
+
+# ── Contract Analysis Endpoints ───────────────────────────────────────────
+
+
+@app.post("/api/contract/upload")
+async def upload_contract(
+    files: list[UploadFile] = File(...),
+    model: str = Form("gpt-5.4-mini"),
+):
+    """Upload a contract document (PDF or images) for AI analysis."""
+    session_id = str(uuid.uuid4())[:8]
+    
+    pdf_files = []
+    image_files = []
+    
+    for f in files:
+        if not f.filename:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        fbytes = await f.read()
+        
+        if ext == ".pdf":
+            pdf_files.append((f.filename, fbytes))
+        elif ext in SUPPORTED_EXTENSIONS:
+            image_files.append((f.filename, fbytes))
+    
+    if not pdf_files and not image_files:
+        raise HTTPException(status_code=400, detail="Nahrajte alespoň jeden soubor (PDF nebo obrázek).")
+    
+    # Process document
+    if pdf_files:
+        # Use first PDF
+        filename, pdf_bytes = pdf_files[0]
+        doc = await process_contract_pdf(pdf_bytes, session_id, filename)
+    else:
+        doc = await process_contract_images(image_files, session_id)
+    
+    # If document has images but no text, run AI OCR
+    agent = ContractAnalyzerAgent(model_name=model)
+    
+    if doc.raw_images and not doc.full_text.strip():
+        ocr_text = await agent.ocr_images(doc.raw_images)
+        doc.full_text = ocr_text
+        # Split text by page markers
+        if "--- Strana" in ocr_text:
+            import re
+            page_texts = re.split(r'--- Strana \d+ ---', ocr_text)
+            page_texts = [pt.strip() for pt in page_texts if pt.strip()]
+            for i, pt in enumerate(page_texts):
+                if i < len(doc.pages):
+                    doc.pages[i].full_text = pt
+        elif doc.pages:
+            doc.pages[0].full_text = ocr_text
+    
+    # Classify contract type
+    classification = await agent.classify_contract(doc.full_text)
+    doc.doc_type = classification["contract_type"]
+    
+    # Save page images for serving
+    session_dir = os.path.join(UPLOAD_DIR, f"contract_{session_id}")
+    os.makedirs(session_dir, exist_ok=True)
+    
+    # Save PDF for rendering or save images
+    page_image_urls = []
+    if pdf_files:
+        pdf_path = os.path.join(session_dir, "document.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_files[0][1])
+        # We'll serve PDF directly
+    
+    for i, page in enumerate(doc.pages):
+        if page.image_data:
+            img_path = os.path.join(session_dir, f"page_{i}.jpg")
+            with open(img_path, "wb") as f:
+                f.write(page.image_data)
+            page_image_urls.append(f"/uploads/contract_{session_id}/page_{i}.jpg")
+    
+    # Store session
+    contract_sessions[session_id] = {
+        "session_id": session_id,
+        "document": doc,
+        "classification": classification,
+        "model": model,
+        "has_pdf": bool(pdf_files),
+        "pdf_filename": pdf_files[0][0] if pdf_files else None,
+        "page_image_urls": page_image_urls,
+    }
+    
+    # Clean raw_images to free memory (keep text)
+    doc.raw_images = []
+    for page in doc.pages:
+        page.image_data = None
+    gc.collect()
+    
+    return {
+        "session_id": session_id,
+        "filename": doc.filename,
+        "total_pages": doc.total_pages,
+        "full_text": doc.full_text,
+        "pages": [p.to_dict() for p in doc.pages],
+        "classification": classification,
+        "has_pdf": bool(pdf_files),
+        "page_image_urls": page_image_urls,
+    }
+
+
+@app.post("/api/contract/query/{session_id}")
+async def query_contract(
+    session_id: str,
+    payload: dict = Body(...),
+):
+    """Query the contract with a natural language question or preset."""
+    cs = contract_sessions.get(session_id)
+    if not cs:
+        raise HTTPException(status_code=404, detail="Contract session not found.")
+    
+    query = payload.get("query", "")
+    if not query:
+        raise HTTPException(status_code=400, detail="Dotaz nesmí být prázdný.")
+    
+    doc = cs["document"]
+    model = payload.get("model", cs.get("model", "gpt-5.4-mini"))
+    
+    agent = ContractAnalyzerAgent(model_name=model)
+    pages_text = [p.full_text for p in doc.pages]
+    
+    result = await agent.query_contract(doc.full_text, query, pages_text)
+    
+    return result
+
+
+@app.get("/api/contract/page-image/{session_id}/{page_num}")
+async def get_contract_page_image(session_id: str, page_num: int):
+    """Get page image for a contract session."""
+    from fastapi.responses import FileResponse
+    
+    img_path = os.path.join(UPLOAD_DIR, f"contract_{session_id}", f"page_{page_num}.jpg")
+    if os.path.exists(img_path):
+        return FileResponse(img_path, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Page image not found.")
+
+
+@app.get("/api/contract/pdf/{session_id}")
+async def get_contract_pdf(session_id: str):
+    """Get the original PDF for a contract session."""
+    from fastapi.responses import FileResponse
+    
+    pdf_path = os.path.join(UPLOAD_DIR, f"contract_{session_id}", "document.pdf")
+    if os.path.exists(pdf_path):
+        return FileResponse(pdf_path, media_type="application/pdf")
+    raise HTTPException(status_code=404, detail="PDF not found.")
 
 
 # Serve uploaded/processed images (panorama, etc.)
