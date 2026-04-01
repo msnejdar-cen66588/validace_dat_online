@@ -737,6 +737,11 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                   <div className={styles.extractAllTitle}>
                     <span>📊</span>
                     Extrahovaná data ({extractAllData.fields.filter(f => f.found).length}/{extractAllData.fields.length})
+                    {(extractAllData as any).stats && (
+                      <span className={styles.extractAllStats}>
+                        ✅ {(extractAllData as any).stats.verified} ověřeno
+                      </span>
+                    )}
                   </div>
                   <button className={styles.exportCsvBtn} onClick={exportCSV}>
                     📥 Export CSV
@@ -752,6 +757,9 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                       <div className={styles.extractAllMeta}>
                         {field.found && (
                           <>
+                            {(field as any).verified && (
+                              <span className={styles.verifiedBadge} title="Citace ověřena v textu">✓</span>
+                            )}
                             <span className={`${styles.confidenceBadge} ${
                               field.confidence >= 0.9 ? styles.confidenceHigh :
                               field.confidence >= 0.6 ? styles.confidenceMedium :

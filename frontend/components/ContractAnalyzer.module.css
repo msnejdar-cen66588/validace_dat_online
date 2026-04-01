@@ -1249,6 +1249,29 @@
   color: #c62828;
 }
 
+.verifiedBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-size: 9px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.extractAllStats {
+  font-size: 10px;
+  font-weight: 500;
+  color: #2e7d32;
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* ─── Red Flags ─── */
 .redFlagsCard {
   background: #fff8f0;

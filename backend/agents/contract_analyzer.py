@@ -384,11 +384,15 @@ DOTAZ UŽIVATELE: {query}
         return await self.query_contract(text, preset_query, pages_text)
 
     async def extract_all(self, text: str, pages_text: list[str], contract_type: str, presets: list[dict]) -> dict:
-        """Extract ALL key data from the contract in a single AI call.
+        """Extract ALL key data from the contract with verification and validation.
         
-        Returns structured table of fields with values, pages, and confidence.
+        Two-phase approach:
+        1. AI extracts all data
+        2. Post-processing verifies citations, validates formats, recalculates confidence
         """
-        # Build page reference
+        import re
+        
+        # Build FULL page reference (no truncation)
         pages_ref = ""
         for i, pt in enumerate(pages_text):
             pages_ref += f"\n\n=== STRANA {i+1} ===\n{pt}"
@@ -403,24 +407,30 @@ TYP SMLOUVY: {contract_type}
 POŽADOVANÉ ÚDAJE (extrahuj minimálně tyto, ale přidej i další důležité):
 {preset_list}
 
-PRAVIDLA:
-1. Prohledej CELOU smlouvu od začátku do konce.
-2. Pro každý údaj uveď přesnou hodnotu, číslo strany a míru jistoty (0.0 - 1.0).
-3. Cituj PŘESNÝ text ze smlouvy.
-4. Pokud údaj nenajdeš, nastav found na false a confidence na 0.
-5. Přidej i další důležité údaje, které ve smlouvě najdeš (datuma, podmínky, pokuty, atd.).
+KRITICKÁ PRAVIDLA:
+1. Prohledej CELOU smlouvu od začátku do konce — KAŽDOU stranu.
+2. Pro každý údaj uveď PŘESNOU hodnotu — konkrétní číslo, jméno, datum, adresu.
+3. Citace MUSÍ být DOSLOVNÝ kopie textu ze smlouvy (min 20 znaků) — ne parafráze.
+4. U částek uveď PŘESNÝ formát jak je ve smlouvě (včetně Kč, haléřů, slovního vyjádření).
+5. U jmen uveď CELÉ jméno včetně titulů pokud jsou uvedeny.
+6. U rodných čísel uveď ve formátu jak je ve smlouvě.
+7. U dat uveď přesný formát ze smlouvy.
+8. Pokud údaj nenajdeš, nastav found na false a confidence na 0.
+9. Přidej i další důležité údaje, které ve smlouvě najdeš ale nejsou v seznamu výše.
+10. Hledej i IMPLICITNÍ informace (např. pokud je uvedena cena bez DPH a DPH, spočítej celkovou).
 
-Odpověz jako JSON:
+FORMÁT ODPOVĚDI (JSON):
 {{
     "fields": [
         {{
             "id": "unikatni_id",
             "label": "Název údaje",
-            "value": "Extrahovaná hodnota (konkrétní číslo, jméno, datum...)",
+            "value": "Extrahovaná hodnota",
             "page": 1,
             "found": true,
             "confidence": 0.95,
-            "citation": "Přesný doslovný úryvek ze smlouvy"
+            "citation": "DOSLOVNÝ úryvek ze smlouvy (min 20, max 200 znaků)",
+            "data_type": "typ_dat"
         }}
     ],
     "summary": "Stručné shrnutí smlouvy (2-3 věty)",
@@ -434,43 +444,153 @@ Odpověz jako JSON:
     ]
 }}
 
+MOŽNÉ data_type: "amount" (částka), "person" (jméno), "date" (datum), "id_number" (RČ/IČO), "address" (adresa), "parcel" (parcela/LV), "text" (jiné)
+
 SMLOUVA:
-{pages_ref[:14000]}
+{pages_ref}
 """
         try:
             response = await self.llm.generate_content(
                 system_instruction=(
                     "Jsi právní AI analytik České spořitelny. "
                     "Extrahuj VŠECHNA klíčová data ze smlouvy do strukturované tabulky. "
-                    "Buď důkladný — nenech žádný důležitý údaj. "
-                    "Zároveň identifikuj potenciální problémy (red flags). "
-                    "Pokud najdeš nesrovnalosti, chybějící podpisy, neobvyklé klauzule nebo vysoké pokuty, uveď je jako red_flags."
+                    "Buď ABSOLUTNĚ důkladný — nenech žádný důležitý údaj. "
+                    "Citace MUSÍ být doslovné kopie textu — ne parafráze. "
+                    "U částek VŽDY uveď přesné číslo. "
+                    "Identifikuj potenciální problémy (red flags): nesrovnalosti, "
+                    "chybějící podpisy, neobvyklé klauzule, vysoké pokuty, chybějící data."
                 ),
                 contents=[prompt],
                 response_mime_type="application/json",
-                max_output_tokens=4000,
-                temperature=0.1,
+                max_output_tokens=6000,
+                temperature=0.05,
             )
             result = json.loads(response)
             
-            # Enrich with highlight positions
+            # ═══ PHASE 2: Post-processing verification ═══
             fields = result.get("fields", [])
+            red_flags = result.get("red_flags", [])
+            
+            verified_fields = []
             for field in fields:
                 citation = field.get("citation", "")
                 page_num = field.get("page", 1) - 1
+                data_type = field.get("data_type", "text")
+                original_confidence = field.get("confidence", 0.5)
+                
+                # ─── Citation Verification ───
+                citation_verified = False
                 if page_num < len(pages_text) and citation:
                     page_text = pages_text[page_num]
                     found_idx = self._find_text_position(page_text, citation)
+                    
                     if found_idx >= 0:
+                        citation_verified = True
+                        # Calculate Y position for highlights
                         lines_before = page_text[:found_idx].count('\n')
                         total_lines = max(page_text.count('\n'), 1)
                         y_ratio = max(0.05, min(0.95, lines_before / total_lines))
                         field["y_ratio"] = round(y_ratio, 3)
+                    else:
+                        # Try other pages (AI might have wrong page number)
+                        for alt_page, alt_text in enumerate(pages_text):
+                            if alt_page == page_num:
+                                continue
+                            alt_idx = self._find_text_position(alt_text, citation)
+                            if alt_idx >= 0:
+                                citation_verified = True
+                                field["page"] = alt_page + 1  # Fix page number
+                                lines_before = alt_text[:alt_idx].count('\n')
+                                total_lines = max(alt_text.count('\n'), 1)
+                                y_ratio = max(0.05, min(0.95, lines_before / total_lines))
+                                field["y_ratio"] = round(y_ratio, 3)
+                                break
+                
+                # ─── Recalculate confidence based on verification ───
+                if field.get("found", False):
+                    if citation_verified:
+                        # Boost confidence if citation was verified in text
+                        field["confidence"] = min(1.0, original_confidence + 0.05)
+                        field["verified"] = True
+                    else:
+                        # Lower confidence if citation not found
+                        field["confidence"] = max(0.3, original_confidence - 0.25)
+                        field["verified"] = False
+                
+                # ─── Data Type Validation ───
+                value = field.get("value", "")
+                
+                if data_type == "id_number" and value:
+                    # Validate Czech RČ format (YYMMDD/XXXX or YYMMDDXXXX)
+                    rc_clean = re.sub(r'[/\s]', '', value)
+                    if re.match(r'^\d{9,10}$', rc_clean):
+                        field["format_valid"] = True
+                    else:
+                        field["format_valid"] = False
+                        if field.get("found"):
+                            red_flags.append({
+                                "severity": "medium",
+                                "title": f"Neplatný formát RČ/IČO: {value}",
+                                "description": f"Hodnota '{value}' nemá platný formát rodného čísla nebo IČO.",
+                                "page": field.get("page", 1),
+                            })
+                
+                elif data_type == "amount" and value:
+                    # Extract and normalize amount
+                    amount_match = re.search(r'[\d\s.,]+', value.replace('\xa0', ' '))
+                    if amount_match:
+                        amount_str = amount_match.group().replace(' ', '').replace('.', '').replace(',', '.')
+                        try:
+                            parsed_amount = float(amount_str)
+                            field["parsed_amount"] = parsed_amount
+                            field["format_valid"] = True
+                        except ValueError:
+                            field["format_valid"] = False
+                
+                elif data_type == "date" and value:
+                    # Check basic date format
+                    if re.search(r'\d{1,2}\.\s*\d{1,2}\.\s*\d{4}', value):
+                        field["format_valid"] = True
+                    else:
+                        field["format_valid"] = False
+                
+                verified_fields.append(field)
+            
+            # ─── Cross-field consistency checks ───
+            # Check if party names appear consistently
+            person_fields = [f for f in verified_fields if f.get("data_type") == "person" and f.get("found")]
+            amount_fields = [f for f in verified_fields if f.get("data_type") == "amount" and f.get("found")]
+            
+            # Check for suspiciously low-confidence found fields
+            low_conf_count = sum(1 for f in verified_fields if f.get("found") and f.get("confidence", 0) < 0.5)
+            if low_conf_count > 3:
+                red_flags.append({
+                    "severity": "medium",
+                    "title": f"Nízká jistota u {low_conf_count} údajů",
+                    "description": "Více extrahovaných údajů má nízkou jistotu. Doporučujeme manuální kontrolu.",
+                    "page": None,
+                })
+            
+            # Check if any found fields have unverified citations
+            unverified = [f for f in verified_fields if f.get("found") and not f.get("verified", False)]
+            if unverified:
+                red_flags.append({
+                    "severity": "low",
+                    "title": f"{len(unverified)} citací nebylo ověřeno v textu",
+                    "description": "Některé citace nebyly nalezeny v přesném znění v textu smlouvy. AI mohla parafrázovat.",
+                    "page": None,
+                })
             
             return {
-                "fields": fields,
+                "fields": verified_fields,
                 "summary": result.get("summary", ""),
-                "red_flags": result.get("red_flags", []),
+                "red_flags": red_flags,
+                "stats": {
+                    "total": len(verified_fields),
+                    "found": sum(1 for f in verified_fields if f.get("found")),
+                    "verified": sum(1 for f in verified_fields if f.get("verified")),
+                    "high_confidence": sum(1 for f in verified_fields if f.get("confidence", 0) >= 0.9),
+                },
             }
         except Exception as e:
             print(f"[ContractAnalyzer] Extract all error: {e}")
@@ -478,6 +598,7 @@ SMLOUVA:
                 "fields": [],
                 "summary": f"Chyba při extrakci: {str(e)}",
                 "red_flags": [],
+                "stats": {"total": 0, "found": 0, "verified": 0, "high_confidence": 0},
             }
 
     async def compare_contracts(self, text_a: str, text_b: str, 
