@@ -426,3 +426,78 @@ export function getContractPdfUrl(sessionId: string): string {
 export function getContractPageImageUrl(sessionId: string, pageNum: number): string {
     return `${API_BASE}/api/contract/page-image/${sessionId}/${pageNum}`;
 }
+
+// ─── Extract All ───
+export interface ExtractAllField {
+    id: string;
+    label: string;
+    value: string;
+    page: number;
+    found: boolean;
+    confidence: number;
+    citation: string;
+    y_ratio?: number;
+}
+
+export interface RedFlag {
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    title: string;
+    description: string;
+    page?: number;
+}
+
+export interface ExtractAllResult {
+    fields: ExtractAllField[];
+    summary: string;
+    red_flags: RedFlag[];
+}
+
+export async function extractAllContractData(sessionId: string, model?: string): Promise<ExtractAllResult> {
+    const res = await fetch(`${API_BASE}/api/contract/extract-all/${sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Extract failed' }));
+        throw new Error(err.detail || 'Extrakce selhala');
+    }
+
+    return res.json();
+}
+
+// ─── Compare Contracts ───
+export interface ContractDifference {
+    category: string;
+    title: string;
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    text_a: string;
+    text_b: string | null;
+    description: string;
+}
+
+export interface CompareResult {
+    summary: string;
+    are_same_type: boolean;
+    type_a: string;
+    type_b: string;
+    differences: ContractDifference[];
+    added_in_b: { title: string; text: string; severity: string }[];
+    missing_in_b: { title: string; text: string; severity: string }[];
+}
+
+export async function compareContracts(sessionA: string, sessionB: string, model?: string): Promise<CompareResult> {
+    const res = await fetch(`${API_BASE}/api/contract/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_a: sessionA, session_b: sessionB, model }),
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Compare failed' }));
+        throw new Error(err.detail || 'Porovnání selhalo');
+    }
+
+    return res.json();
+}

@@ -4,12 +4,18 @@ import styles from './ContractAnalyzer.module.css';
 import {
   uploadContract,
   queryContract,
+  extractAllContractData,
+  compareContracts,
   getContractPdfUrl,
   getContractPageImageUrl,
   API_BASE,
   type ContractUploadResponse,
   type ContractQueryResult,
   type ContractPreset,
+  type ExtractAllResult,
+  type ExtractAllField,
+  type RedFlag,
+  type CompareResult,
 } from '@/lib/api';
 
 interface QueryResultEntry {
@@ -47,6 +53,17 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const [viewMode, setViewMode] = useState<'text' | 'original' | 'pdf'>('text');
   const [panelWidth, setPanelWidth] = useState(380);
   const [isResizing, setIsResizing] = useState(false);
+  
+  // Extract All
+  const [extractAllData, setExtractAllData] = useState<ExtractAllResult | null>(null);
+  const [extractAllLoading, setExtractAllLoading] = useState(false);
+  
+  // Compare
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareFiles, setCompareFiles] = useState<File[]>([]);
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareSessionB, setCompareSessionB] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const documentContentRef = useRef<HTMLDivElement>(null);
@@ -357,6 +374,76 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   }, [contractData, highlightTexts]);
 
   // ─── Reset ───
+  // ─── Extract All Handler ───
+  const handleExtractAll = async () => {
+    if (!contractData) return;
+    setExtractAllLoading(true);
+    setError(null);
+    try {
+      const result = await extractAllContractData(contractData.session_id, selectedModel);
+      setExtractAllData(result);
+      
+      // Set highlights from all extracted fields
+      const allCitations = result.fields
+        .filter(f => f.found && f.citation)
+        .map(f => f.citation);
+      setHighlightTexts(allCitations);
+      
+      // Set highlight positions
+      const positions = result.fields
+        .filter(f => f.found && f.y_ratio !== undefined)
+        .map(f => ({ page: f.page - 1, text: f.citation, y_ratio: f.y_ratio! }));
+      setHighlightPositions(positions);
+    } catch (e: any) {
+      setError(e.message || 'Chyba při extrakci.');
+    } finally {
+      setExtractAllLoading(false);
+    }
+  };
+
+  // ─── Compare Handler ───
+  const handleCompare = async () => {
+    if (!contractData || compareFiles.length === 0) return;
+    setCompareLoading(true);
+    setError(null);
+    try {
+      // Upload second document
+      const uploadResult = await uploadContract(compareFiles, selectedModel);
+      setCompareSessionB(uploadResult.session_id);
+      
+      // Compare
+      const result = await compareContracts(
+        contractData.session_id, 
+        uploadResult.session_id, 
+        selectedModel
+      );
+      setCompareResult(result);
+      setCompareMode(false); // Hide upload, show results
+    } catch (e: any) {
+      setError(e.message || 'Chyba při porovnávání.');
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
+  // ─── CSV Export ───
+  const exportCSV = () => {
+    if (!extractAllData) return;
+    const header = 'Údaj;Hodnota;Strana;Jistota;Nalezeno;Citace\n';
+    const rows = extractAllData.fields.map(f =>
+      `"${f.label}";"${f.value}";"${f.page}";"${Math.round(f.confidence * 100)}%";"${f.found ? 'Ano' : 'Ne'}";"${f.citation?.replace(/"/g, '""') || ''}"`
+    ).join('\n');
+    
+    const bom = '\uFEFF'; // UTF-8 BOM for Excel
+    const blob = new Blob([bom + header + rows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${contractData?.filename || 'smlouva'}_extrakce.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleReset = () => {
     setStep('upload');
     setFiles([]);
@@ -369,6 +456,11 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
     setViewMode('text');
     setProcessingPhase(0);
     setElapsed(0);
+    setExtractAllData(null);
+    setCompareResult(null);
+    setCompareMode(false);
+    setCompareFiles([]);
+    setCompareSessionB(null);
   };
 
   // ═══════════════════════════════════════════════════════════════════
@@ -588,6 +680,179 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                 })}
               </div>
             </div>
+
+            {/* ─── Action Buttons ─── */}
+            <div className={styles.actionButtonsRow}>
+              <button
+                className={styles.extractAllBtn}
+                onClick={handleExtractAll}
+                disabled={extractAllLoading || queryLoading}
+              >
+                {extractAllLoading ? (
+                  <><span className={styles.presetBtnSpinner} /> Extrahuji...</>
+                ) : (
+                  <>⚡ Extrahovat vše</>
+                )}
+              </button>
+              <button
+                className={styles.compareBtn}
+                onClick={() => setCompareMode(!compareMode)}
+                disabled={compareLoading}
+              >
+                🔀 Porovnat
+              </button>
+            </div>
+
+            {/* ─── Compare Upload ─── */}
+            {compareMode && (
+              <div className={styles.compareCard}>
+                <div className={styles.compareTitle}>📎 Nahrát druhý dokument k porovnání</div>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.heic,image/*"
+                  multiple
+                  onChange={(e) => setCompareFiles(Array.from(e.target.files || []))}
+                  className={styles.compareFileInput}
+                />
+                {compareFiles.length > 0 && (
+                  <button
+                    className={styles.compareStartBtn}
+                    onClick={handleCompare}
+                    disabled={compareLoading}
+                  >
+                    {compareLoading ? (
+                      <><span className={styles.presetBtnSpinner} /> Porovnávám...</>
+                    ) : (
+                      <>🔍 Porovnat dokumenty</>
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* ─── Extract All Results Table ─── */}
+            {extractAllData && (
+              <div className={styles.extractAllCard}>
+                <div className={styles.extractAllHeader}>
+                  <div className={styles.extractAllTitle}>
+                    <span>📊</span>
+                    Extrahovaná data ({extractAllData.fields.filter(f => f.found).length}/{extractAllData.fields.length})
+                  </div>
+                  <button className={styles.exportCsvBtn} onClick={exportCSV}>
+                    📥 Export CSV
+                  </button>
+                </div>
+                <div className={styles.extractAllTable}>
+                  {extractAllData.fields.map((field, idx) => (
+                    <div key={idx} className={`${styles.extractAllRow} ${!field.found ? styles.extractAllRowNotFound : ''}`}>
+                      <div className={styles.extractAllLabel}>{field.label}</div>
+                      <div className={styles.extractAllValue}>
+                        {field.found ? field.value : '—'}
+                      </div>
+                      <div className={styles.extractAllMeta}>
+                        {field.found && (
+                          <>
+                            <span className={`${styles.confidenceBadge} ${
+                              field.confidence >= 0.9 ? styles.confidenceHigh :
+                              field.confidence >= 0.6 ? styles.confidenceMedium :
+                              styles.confidenceLow
+                            }`}>
+                              {Math.round(field.confidence * 100)}%
+                            </span>
+                            <span className={styles.extractAllPage}>str. {field.page}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ─── Red Flags ─── */}
+            {extractAllData && extractAllData.red_flags.length > 0 && (
+              <div className={styles.redFlagsCard}>
+                <div className={styles.redFlagsTitle}>
+                  <span>⚠️</span>
+                  Upozornění ({extractAllData.red_flags.length})
+                </div>
+                {extractAllData.red_flags.map((flag, idx) => (
+                  <div key={idx} className={`${styles.redFlagItem} ${styles[`redFlag_${flag.severity}`]}`}>
+                    <div className={styles.redFlagSeverity}>
+                      {flag.severity === 'critical' ? '🔴' : flag.severity === 'high' ? '🟠' : flag.severity === 'medium' ? '🟡' : '🟢'}
+                    </div>
+                    <div className={styles.redFlagContent}>
+                      <div className={styles.redFlagLabel}>{flag.title}</div>
+                      <div className={styles.redFlagDesc}>{flag.description}</div>
+                      {flag.page && <div className={styles.redFlagPage}>📍 Strana {flag.page}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ─── Compare Results ─── */}
+            {compareResult && (
+              <div className={styles.compareResultCard}>
+                <div className={styles.compareResultTitle}>
+                  <span>🔀</span>
+                  Výsledek porovnání
+                </div>
+                <div className={styles.compareResultSummary}>{compareResult.summary}</div>
+                
+                {compareResult.differences.length > 0 && (
+                  <div className={styles.compareDiffSection}>
+                    <div className={styles.compareDiffSectionTitle}>Změny ({compareResult.differences.length})</div>
+                    {compareResult.differences.map((diff, idx) => (
+                      <div key={idx} className={`${styles.compareDiffItem} ${styles[`severity_${diff.severity}`]}`}>
+                        <div className={styles.compareDiffHeader}>
+                          <span className={styles.compareDiffCategory}>{diff.category}</span>
+                          <span className={`${styles.compareDiffSeverity} ${styles[`severity_${diff.severity}`]}`}>
+                            {diff.severity === 'critical' ? '🔴 Kritické' : diff.severity === 'high' ? '🟠 Vysoké' : diff.severity === 'medium' ? '🟡 Střední' : '🟢 Nízké'}
+                          </span>
+                        </div>
+                        <div className={styles.compareDiffTitle}>{diff.title}</div>
+                        <div className={styles.compareDiffTexts}>
+                          <div className={styles.compareDiffA}>
+                            <span className={styles.compareDiffLabel}>A:</span> {diff.text_a}
+                          </div>
+                          {diff.text_b && (
+                            <div className={styles.compareDiffB}>
+                              <span className={styles.compareDiffLabel}>B:</span> {diff.text_b}
+                            </div>
+                          )}
+                        </div>
+                        <div className={styles.compareDiffDescription}>{diff.description}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {compareResult.added_in_b.length > 0 && (
+                  <div className={styles.compareDiffSection}>
+                    <div className={styles.compareDiffSectionTitle}>✅ Přidáno v B ({compareResult.added_in_b.length})</div>
+                    {compareResult.added_in_b.map((item, idx) => (
+                      <div key={idx} className={styles.compareDiffItemAdded}>
+                        <div className={styles.compareDiffTitle}>{item.title}</div>
+                        <div className={styles.compareDiffDesc}>{item.text}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {compareResult.missing_in_b.length > 0 && (
+                  <div className={styles.compareDiffSection}>
+                    <div className={styles.compareDiffSectionTitle}>❌ Chybí v B ({compareResult.missing_in_b.length})</div>
+                    {compareResult.missing_in_b.map((item, idx) => (
+                      <div key={idx} className={styles.compareDiffItemMissing}>
+                        <div className={styles.compareDiffTitle}>{item.title}</div>
+                        <div className={styles.compareDiffDesc}>{item.text}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Custom Query */}
             <div className={styles.queryCard}>

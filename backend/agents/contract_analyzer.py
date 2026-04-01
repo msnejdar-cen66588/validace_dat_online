@@ -382,3 +382,213 @@ DOTAZ UŽIVATELE: {query}
     async def extract_preset(self, text: str, preset_query: str, pages_text: list[str]) -> dict:
         """Extract data for a specific preset query — uses the same query mechanism."""
         return await self.query_contract(text, preset_query, pages_text)
+
+    async def extract_all(self, text: str, pages_text: list[str], contract_type: str, presets: list[dict]) -> dict:
+        """Extract ALL key data from the contract in a single AI call.
+        
+        Returns structured table of fields with values, pages, and confidence.
+        """
+        # Build page reference
+        pages_ref = ""
+        for i, pt in enumerate(pages_text):
+            pages_ref += f"\n\n=== STRANA {i+1} ===\n{pt}"
+
+        # Build preset list for the prompt
+        preset_list = "\n".join([f"- {p['label']}: {p['query']}" for p in presets])
+
+        prompt = f"""Extrahuj VŠECHNY klíčové údaje z této smlouvy do strukturované tabulky.
+
+TYP SMLOUVY: {contract_type}
+
+POŽADOVANÉ ÚDAJE (extrahuj minimálně tyto, ale přidej i další důležité):
+{preset_list}
+
+PRAVIDLA:
+1. Prohledej CELOU smlouvu od začátku do konce.
+2. Pro každý údaj uveď přesnou hodnotu, číslo strany a míru jistoty (0.0 - 1.0).
+3. Cituj PŘESNÝ text ze smlouvy.
+4. Pokud údaj nenajdeš, nastav found na false a confidence na 0.
+5. Přidej i další důležité údaje, které ve smlouvě najdeš (datuma, podmínky, pokuty, atd.).
+
+Odpověz jako JSON:
+{{
+    "fields": [
+        {{
+            "id": "unikatni_id",
+            "label": "Název údaje",
+            "value": "Extrahovaná hodnota (konkrétní číslo, jméno, datum...)",
+            "page": 1,
+            "found": true,
+            "confidence": 0.95,
+            "citation": "Přesný doslovný úryvek ze smlouvy"
+        }}
+    ],
+    "summary": "Stručné shrnutí smlouvy (2-3 věty)",
+    "red_flags": [
+        {{
+            "severity": "high",
+            "title": "Název problému",
+            "description": "Popis nalezeného problému",
+            "page": 1
+        }}
+    ]
+}}
+
+SMLOUVA:
+{pages_ref[:14000]}
+"""
+        try:
+            response = await self.llm.generate_content(
+                system_instruction=(
+                    "Jsi právní AI analytik České spořitelny. "
+                    "Extrahuj VŠECHNA klíčová data ze smlouvy do strukturované tabulky. "
+                    "Buď důkladný — nenech žádný důležitý údaj. "
+                    "Zároveň identifikuj potenciální problémy (red flags). "
+                    "Pokud najdeš nesrovnalosti, chybějící podpisy, neobvyklé klauzule nebo vysoké pokuty, uveď je jako red_flags."
+                ),
+                contents=[prompt],
+                response_mime_type="application/json",
+                max_output_tokens=4000,
+                temperature=0.1,
+            )
+            result = json.loads(response)
+            
+            # Enrich with highlight positions
+            fields = result.get("fields", [])
+            for field in fields:
+                citation = field.get("citation", "")
+                page_num = field.get("page", 1) - 1
+                if page_num < len(pages_text) and citation:
+                    page_text = pages_text[page_num]
+                    found_idx = self._find_text_position(page_text, citation)
+                    if found_idx >= 0:
+                        lines_before = page_text[:found_idx].count('\n')
+                        total_lines = max(page_text.count('\n'), 1)
+                        y_ratio = max(0.05, min(0.95, lines_before / total_lines))
+                        field["y_ratio"] = round(y_ratio, 3)
+            
+            return {
+                "fields": fields,
+                "summary": result.get("summary", ""),
+                "red_flags": result.get("red_flags", []),
+            }
+        except Exception as e:
+            print(f"[ContractAnalyzer] Extract all error: {e}")
+            return {
+                "fields": [],
+                "summary": f"Chyba při extrakci: {str(e)}",
+                "red_flags": [],
+            }
+
+    async def compare_contracts(self, text_a: str, text_b: str, 
+                                 name_a: str, name_b: str) -> dict:
+        """Compare two contracts and return structured differences."""
+        prompt = f"""Porovnej tyto dva dokumenty a najdi VŠECHNY rozdíly.
+
+DOKUMENT A: {name_a}
+{text_a[:7000]}
+
+===
+
+DOKUMENT B: {name_b}
+{text_b[:7000]}
+
+PRAVIDLA:
+1. Porovnej oba dokumenty systematicky — smluvní strany, částky, data, podmínky, parcely, atd.
+2. Identifikuj co se ZMĚNILO, co PŘIBYLO a co CHYBÍ.
+3. U každého rozdílu cituj přesný text z obou dokumentů.
+4. Vyhodnoť závažnost rozdílu (low/medium/high/critical).
+
+Odpověz jako JSON:
+{{
+    "summary": "Stručné shrnutí porovnání (2-3 věty)",
+    "are_same_type": true,
+    "type_a": "Typ dokumentu A",
+    "type_b": "Typ dokumentu B",
+    "differences": [
+        {{
+            "category": "Kategorie (cena/strany/podmínky/data/parcely/jiné)",
+            "title": "Název rozdílu",
+            "severity": "high",
+            "text_a": "Text z dokumentu A",
+            "text_b": "Text z dokumentu B (nebo null pokud chybí)",
+            "description": "Popis změny"
+        }}
+    ],
+    "added_in_b": [
+        {{
+            "title": "Co přibylo v dokumentu B",
+            "text": "Citace z dokumentu B",
+            "severity": "medium"
+        }}
+    ],
+    "missing_in_b": [
+        {{
+            "title": "Co chybí v dokumentu B",
+            "text": "Citace z dokumentu A",
+            "severity": "medium"
+        }}
+    ]
+}}
+"""
+        try:
+            response = await self.llm.generate_content(
+                system_instruction=(
+                    "Jsi právní AI analytik specializovaný na porovnávání bankovních smluv. "
+                    "Systematicky porovnáváš dva dokumenty a identifikuješ VŠECHNY rozdíly. "
+                    "Buď důkladný — i malý rozdíl v čísle nebo datu může být zásadní. "
+                    "Odpovídej v češtině."
+                ),
+                contents=[prompt],
+                response_mime_type="application/json",
+                max_output_tokens=4000,
+                temperature=0.1,
+            )
+            return json.loads(response)
+        except Exception as e:
+            print(f"[ContractAnalyzer] Compare error: {e}")
+            return {
+                "summary": f"Chyba při porovnávání: {str(e)}",
+                "differences": [],
+                "added_in_b": [],
+                "missing_in_b": [],
+            }
+
+    @staticmethod
+    def _find_text_position(page_text: str, citation: str) -> int:
+        """Multi-strategy text search for finding citation position."""
+        import re
+        search = citation.strip()
+        
+        # Strategy 1: Full match
+        idx = page_text.lower().find(search.lower())
+        if idx >= 0:
+            return idx
+        
+        # Strategy 2: First 80 chars
+        if len(search) > 80:
+            idx = page_text.lower().find(search[:80].lower())
+            if idx >= 0:
+                return idx
+        
+        # Strategy 3: First 40 chars
+        if len(search) > 40:
+            idx = page_text.lower().find(search[:40].lower())
+            if idx >= 0:
+                return idx
+        
+        # Strategy 4: Numbers/amounts
+        numbers = re.findall(r'[\d.,]+\s*(?:Kč|CZK|EUR|%)', search)
+        for num in numbers:
+            idx = page_text.find(num)
+            if idx >= 0:
+                return idx
+        
+        # Strategy 5: Significant words
+        words = [w for w in search.split() if len(w) >= 5]
+        for word in words[:3]:
+            idx = page_text.lower().find(word.lower())
+            if idx >= 0:
+                return idx
+        
+        return -1

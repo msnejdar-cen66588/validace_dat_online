@@ -838,6 +838,64 @@ async def query_contract(
     return result
 
 
+@app.post("/api/contract/extract-all/{session_id}")
+async def extract_all_contract_data(
+    session_id: str,
+    payload: dict = Body(...),
+):
+    """Extract ALL key data from the contract in one shot."""
+    cs = contract_sessions.get(session_id)
+    if not cs:
+        raise HTTPException(status_code=404, detail="Contract session not found.")
+    
+    doc = cs["document"]
+    model = payload.get("model", cs.get("model", "gpt-5.4-mini"))
+    classification = cs["classification"]
+    
+    agent = ContractAnalyzerAgent(model_name=model)
+    pages_text = [p.full_text for p in doc.pages]
+    
+    result = await agent.extract_all(
+        doc.full_text, 
+        pages_text, 
+        classification.get("contract_type", "unknown"),
+        classification.get("presets", []),
+    )
+    
+    return result
+
+
+@app.post("/api/contract/compare")
+async def compare_contracts_endpoint(
+    payload: dict = Body(...),
+):
+    """Compare two contract sessions."""
+    session_a = payload.get("session_a")
+    session_b = payload.get("session_b")
+    model = payload.get("model", "gpt-5.4-mini")
+    
+    if not session_a or not session_b:
+        raise HTTPException(status_code=400, detail="Vyžadovány dva session IDs.")
+    
+    cs_a = contract_sessions.get(session_a)
+    cs_b = contract_sessions.get(session_b)
+    
+    if not cs_a:
+        raise HTTPException(status_code=404, detail=f"Session A ({session_a}) nenalezena.")
+    if not cs_b:
+        raise HTTPException(status_code=404, detail=f"Session B ({session_b}) nenalezena.")
+    
+    agent = ContractAnalyzerAgent(model_name=model)
+    result = await agent.compare_contracts(
+        cs_a["document"].full_text,
+        cs_b["document"].full_text,
+        cs_a["document"].filename,
+        cs_b["document"].filename,
+    )
+    
+    return result
+
+
 @app.get("/api/contract/page-image/{session_id}/{page_num}")
 async def get_contract_page_image(session_id: str, page_num: int):
     """Get page image for a contract session."""
