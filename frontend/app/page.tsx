@@ -278,15 +278,11 @@ export default function Home() {
     setProcessingPhase('uploading');
     setStep('processing');
     try {
-      setProcessingPhase('compressing');
       const result = await uploadBatch(filesArr, selectedModel);
       setBatchId(result.batch_id);
       setBatchCases(result.cases);
-      setProcessingPhase('starting');
-      await new Promise(resolve => setTimeout(resolve, 800));
+      // Start batch processing (preparation + agents happen sequentially per case)
       await startBatch(result.batch_id);
-      setProcessingPhase('ready');
-      await new Promise(resolve => setTimeout(resolve, 600));
       setStep('batch');
     } catch (e: any) {
       setError(e.message || 'Chyba při hromadném nahrávání');

@@ -110,6 +110,15 @@ export function useBatchWebSocket(batchId: string | null) {
                         setCurrentIndex(-1);
                         break;
 
+                    case 'batch_case_preparing':
+                        setCurrentIndex(msg.index ?? -1);
+                        setCases(prev => prev.map(c =>
+                            c.case_id === msg.case_id
+                                ? { ...c, status: 'preparing' }
+                                : c
+                        ));
+                        break;
+
                     case 'batch_case_start':
                         setCurrentIndex(msg.index ?? -1);
                         setCases(prev => prev.map(c =>
@@ -128,6 +137,7 @@ export function useBatchWebSocket(batchId: string | null) {
                                     semaphore: msg.semaphore,
                                     semaphore_color: msg.semaphore_color,
                                     total_time: msg.total_time,
+                                    address: (msg as any).address || c.address,
                                 }
                                 : c
                         ));

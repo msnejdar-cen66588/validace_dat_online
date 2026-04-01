@@ -9,7 +9,6 @@ import json
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
-from google.genai import types
 
 
 INSPECTOR_SYSTEM_PROMPT = """Jsi specializovaný inspektor nemovitostí. Tvým úkolem je na základě vizuální analýzy fotografií rozhodnout, zda je rodinný dům (RD) způsobilý pro automatizované online ocenění. Tvým cílem je identifikovat rizika, která vyžadují zásah odhadce nebo statika.
@@ -80,6 +79,7 @@ class InspektorAgent(BaseAgent):
             )
 
         try:
+            from google.genai import types
             self.log("Sending images for technical inspection...", "thinking")
 
             parts = [

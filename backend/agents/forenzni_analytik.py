@@ -14,7 +14,6 @@ from config import (
     MANIPULATION_SCORE_THRESHOLD, CONFIDENCE_THRESHOLD,
     GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_CREDENTIALS_JSON, BLOCKED_DOMAINS
 )
-from google.genai import types
 
 FORENSIC_SYSTEM_PROMPT = """Jsi forenzní expert na analýzu fotografií nemovitostí. Tvým úkolem je detekovat jakékoliv manipulace, AI úpravy, retuše nebo nesrovnalosti.
 
@@ -74,13 +73,18 @@ class ForenzniAnalytikAgent(BaseAgent):
         
         try:
             if GOOGLE_CREDENTIALS_JSON:
+                from google.cloud import vision
+                from google.oauth2 import service_account
                 creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
                 credentials = service_account.Credentials.from_service_account_info(creds_dict)
                 self.vision_client = vision.ImageAnnotatorClient(credentials=credentials)
                 self.log("Google Cloud Vision klient inicializován z JSON řetězce.")
             elif GOOGLE_APPLICATION_CREDENTIALS:
+                from google.cloud import vision
                 self.vision_client = vision.ImageAnnotatorClient()
                 self.log("Google Cloud Vision klient inicializován ze souboru.")
+        except ImportError:
+            self.log("google-cloud-vision není nainstalováno – web detection přeskočeno.", "warn")
         except Exception as e:
             self.log(f"Nepodařilo se inicializovat Google Cloud Vision: {e}", "warn")
 
@@ -90,9 +94,10 @@ class ForenzniAnalytikAgent(BaseAgent):
             return {"photo_id": photo_id, "found_on_blocked_domain": False, "details": []}
             
         try:
+            from google.cloud import vision
             with open(image_path, "rb") as image_file:
                 content = image_file.read()
-                
+
             image = vision.Image(content=content)
             
             # Run vision API in a separate thread since it's blocking
@@ -141,6 +146,7 @@ class ForenzniAnalytikAgent(BaseAgent):
             )
 
         try:
+            from google.genai import types
             self.log("Sending images for forensic analysis...", "thinking")
             
             # 1. Run Web Detection in parallel for all images if enabled

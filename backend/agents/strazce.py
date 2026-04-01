@@ -15,7 +15,6 @@ from datetime import datetime
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL
-from google.genai import types
 
 GUARDIAN_SYSTEM_PROMPT = """Jsi expert na validaci fotografické dokumentace nemovitostí typu Rodinný dům (RD) pro účely bankovního ocenění.
 
@@ -150,6 +149,7 @@ class StrazceAgent(BaseAgent):
             return self._fallback_result(total)
 
         try:
+            from google.genai import types
             parts = [f"Klasifikuj těchto {total} fotografií rodinného domu:\n"]
 
             for img in images:

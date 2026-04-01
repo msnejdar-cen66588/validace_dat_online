@@ -15,7 +15,6 @@ from PIL import Image, ImageDraw, ImageFont
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, UPLOAD_DIR
-from google.genai import types
 from lv_parser import parse_lv, LVData
 
 CUZK_WMS_ORTOFOTO = "https://ags.cuzk.gov.cz/arcgis1/services/ORTOFOTO/MapServer/WMSServer"
@@ -539,6 +538,7 @@ class KatastralniAnalytikAgent(BaseAgent):
     async def _analyze_ortofoto(self, ortofoto_path: str, lv_data: LVData, images: list) -> dict | None:
         """Analyze ortofoto with Gemini to detect unregistered buildings."""
         try:
+            from google.genai import types
             with open(ortofoto_path, "rb") as f:
                 ortofoto_bytes = f.read()
 

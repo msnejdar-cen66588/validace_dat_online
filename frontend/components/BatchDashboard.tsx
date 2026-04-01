@@ -180,17 +180,19 @@ export default function BatchDashboard({
             {/* Case list */}
             <div className={styles.caseList}>
                 {cases.map((c, i) => {
+                    const isPreparing = c.status === 'preparing';
                     const isProcessing = c.status === 'processing';
                     const isCompleted = c.status === 'completed';
+                    const isActive = isPreparing || isProcessing;
                     const isLoading = loadingCaseId === c.case_id;
 
                     return (
                         <div
                             key={c.case_id}
-                            className={`${styles.caseRow} ${isCompleted ? styles.caseRowCompleted : ''} ${isProcessing ? styles.caseRowProcessing : ''}`}
+                            className={`${styles.caseRow} ${isCompleted ? styles.caseRowCompleted : ''} ${isActive ? styles.caseRowProcessing : ''}`}
                             onClick={() => handleCaseClick(c)}
                         >
-                            <div className={`${styles.caseIndex} ${isProcessing ? styles.caseIndexProcessing : ''} ${isCompleted ? styles.caseIndexCompleted : ''}`}>
+                            <div className={`${styles.caseIndex} ${isActive ? styles.caseIndexProcessing : ''} ${isCompleted ? styles.caseIndexCompleted : ''}`}>
                                 {i + 1}
                             </div>
 
@@ -210,7 +212,7 @@ export default function BatchDashboard({
                                 <span className={styles.caseTime}>{formatTime(c.total_time)}</span>
                             )}
 
-                            {isProcessing && <div className={styles.miniSpinner} />}
+                            {isActive && <div className={styles.miniSpinner} />}
                             {isLoading && <div className={styles.miniSpinner} />}
 
                             {isCompleted && c.semaphore_color && (
@@ -218,11 +220,12 @@ export default function BatchDashboard({
                             )}
 
                             <span className={`${styles.caseStatus} ${
-                                isProcessing ? styles.caseStatusProcessing :
+                                isActive ? styles.caseStatusProcessing :
                                 isCompleted ? styles.caseStatusCompleted :
                                 styles.caseStatusPending
                             }`}>
-                                {isProcessing ? 'Zpracovává se' :
+                                {isPreparing ? 'Připravuji soubory' :
+                                 isProcessing ? 'Agenti pracují' :
                                  isCompleted ? 'Hotovo' : 'Čeká'}
                             </span>
 

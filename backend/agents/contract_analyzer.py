@@ -392,7 +392,7 @@ DOTAZ UŽIVATELE: {query}
         """
         import re
         
-        # Build FULL page reference (no truncation)
+        # Build page reference (truncated to fit 512MB RAM on Render free tier)
         pages_ref = ""
         for i, pt in enumerate(pages_text):
             pages_ref += f"\n\n=== STRANA {i+1} ===\n{pt}"
@@ -447,7 +447,7 @@ FORMÁT ODPOVĚDI (JSON):
 MOŽNÉ data_type: "amount" (částka), "person" (jméno), "date" (datum), "id_number" (RČ/IČO), "address" (adresa), "parcel" (parcela/LV), "text" (jiné)
 
 SMLOUVA:
-{pages_ref}
+{pages_ref[:20000]}
 """
         try:
             response = await self.llm.generate_content(

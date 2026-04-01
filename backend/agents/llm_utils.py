@@ -5,8 +5,6 @@ import os
 import base64
 from typing import Optional, List, Any, Union
 import httpx
-from google import genai
-from google.genai import types
 from config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 
 class LLMClient:
@@ -18,6 +16,7 @@ class LLMClient:
         
         if self._is_gemini():
             if GEMINI_API_KEY:
+                from google import genai
                 self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
         else:
             # Any non-Gemini model goes through OpenAI-compatible endpoint
@@ -61,6 +60,8 @@ class LLMClient:
     ) -> str:
         if not self.gemini_client:
             raise ValueError("Gemini client not initialized (check API key)")
+
+        from google.genai import types
 
         # Normalize content parts: convert generic image objects to Gemini Part objects
         normalized = []

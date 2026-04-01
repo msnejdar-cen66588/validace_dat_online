@@ -23,7 +23,7 @@ from lv_parser import parse_lv
 from agents.odhadce import OdhadceAgent
 from report_generator import ReportGenerator
 from batch_processor import (
-    BatchSession, group_files_by_subfolder, prepare_batch_cases, run_batch,
+    BatchSession, group_files_by_subfolder, run_batch,
 )
 from contract_ocr import process_contract_pdf, process_contract_images
 from agents.contract_analyzer import ContractAnalyzerAgent
@@ -53,8 +53,16 @@ global_websockets: dict[str, list[WebSocket]] = {}
 batch_sessions: dict[str, BatchSession] = {}
 batch_websockets: dict[str, list[WebSocket]] = {}
 
-# Contract analysis session store
+# Contract analysis session store (limited to save memory on free Render 512MB)
+MAX_CONTRACT_SESSIONS = 3
 contract_sessions: dict[str, dict] = {}
+
+def _cleanup_contract_sessions():
+    """Evict oldest contract sessions if over limit."""
+    while len(contract_sessions) > MAX_CONTRACT_SESSIONS:
+        oldest_key = next(iter(contract_sessions))
+        del contract_sessions[oldest_key]
+    gc.collect()
 
 
 @app.get("/api/health")
@@ -557,6 +565,10 @@ async def batch_upload(
 ):
     """Upload a folder (webkitdirectory) for batch processing.
     Files arrive with their relative paths preserved via webkitdirectory.
+    
+    This endpoint only groups files by subfolder and stores raw bytes.
+    Actual image compression and PDF parsing happens lazily during run_batch,
+    one case at a time, so the user sees results faster.
     """
     batch_id = str(uuid.uuid4())[:8]
 
@@ -577,48 +589,45 @@ async def batch_upload(
     if not raw_cases:
         raise HTTPException(status_code=400, detail="Nebyly nalezeny žádné podsložky s podklady.")
 
-    # Prepare cases (compress images, parse PDFs)
-    prepared_cases = await prepare_batch_cases(raw_cases, batch_id)
-
-    if not prepared_cases:
-        raise HTTPException(status_code=400, detail="Žádný případ neobsahoval platné soubory.")
-
-    # Create batch session
+    # Create batch session with raw data — no heavy processing yet
     batch = BatchSession(batch_id, model=model)
-    batch.cases = prepared_cases
+    batch.raw_cases = raw_cases
 
-    # Also store each case session in the global sessions dict
-    # so that /api/pipeline/results/{session_id} works for individual cases
-    for case in prepared_cases:
-        sessions[case["session_id"]] = {
-            "session_id": case["session_id"],
-            "images": case["images"],
-            "year_built": case.get("year_built"),
-            "property_address": case.get("property_address", ""),
-            "property_data": case.get("property_data"),
-            "lv_pdf_path": case.get("lv_pdf_path"),
-            "selected_parcels": case.get("selected_parcels"),
-            "has_pdf_photos": case.get("has_pdf_photos", False),
+    # Build lightweight placeholder cases for the response
+    ordered_rev_ids = sorted(raw_cases.keys())
+    batch.cases = [
+        {
+            "case_id": f"{batch_id}_{rev_id}",
+            "rev_id": rev_id,
+            "status": "pending",
+            "address": "",
+            "session_id": "",
+            "file_counts": {
+                "images": len(raw_cases[rev_id].get("images", [])),
+                "pdfs": len(raw_cases[rev_id].get("pdfs", [])),
+            },
         }
+        for rev_id in ordered_rev_ids
+    ]
 
     batch_sessions[batch_id] = batch
 
-    # Free uploaded bytes
+    # Free the map (raw_cases holds refs to byte data now)
     del file_bytes_map
     gc.collect()
 
     return {
         "batch_id": batch_id,
-        "total_cases": len(prepared_cases),
+        "total_cases": len(ordered_rev_ids),
         "cases": [
             {
                 "case_id": c["case_id"],
                 "rev_id": c["rev_id"],
-                "session_id": c["session_id"],
+                "session_id": c.get("session_id", ""),
                 "address": c.get("address", ""),
                 "file_counts": c.get("file_counts", {}),
             }
-            for c in prepared_cases
+            for c in batch.cases
         ],
     }
 
@@ -644,15 +653,12 @@ async def start_batch_pipeline(
 
     async def _run():
         try:
-            await run_batch(batch)
-            # Store results in individual sessions too
-            for case in batch.cases:
-                sid = case["session_id"]
-                cid = case["case_id"]
-                if sid in sessions and cid in batch.case_results:
-                    sessions[sid]["result"] = batch.case_results[cid]
+            # run_batch now handles preparation + processing + session storage
+            await run_batch(batch, sessions)
         except Exception as e:
+            import traceback
             print(f"[Batch] Fatal error: {e}")
+            traceback.print_exc()
             batch.status = "error"
 
     background_tasks.add_task(_run)
@@ -679,10 +685,21 @@ async def get_batch_case_result(batch_id: str, case_id: str):
     batch = batch_sessions.get(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found.")
-    result = batch.case_results.get(case_id)
-    if not result:
+
+    # Find the session_id for this case
+    case_summary = batch.case_results.get(case_id)
+    if not case_summary:
         raise HTTPException(status_code=404, detail="Case result not available yet.")
-    return {"completed": True, **result}
+
+    # Full result is stored in the sessions store (batch.case_results is slimmed down)
+    session_id = case_summary.get("session_id")
+    if session_id and session_id in sessions:
+        full_result = sessions[session_id].get("result")
+        if full_result:
+            return {"completed": True, **full_result}
+
+    # Fallback: return the summary from batch (shouldn't normally happen)
+    return {"completed": True, **case_summary}
 
 
 @app.websocket("/ws/batch/{batch_id}")
@@ -784,7 +801,8 @@ async def upload_contract(
                 f.write(page.image_data)
             page_image_urls.append(f"/uploads/contract_{session_id}/page_{i}.jpg")
     
-    # Store session
+    # Store session (evict old ones to stay within 512MB)
+    _cleanup_contract_sessions()
     contract_sessions[session_id] = {
         "session_id": session_id,
         "document": doc,
@@ -795,7 +813,7 @@ async def upload_contract(
         "page_image_urls": page_image_urls,
     }
     
-    # Clean raw_images to free memory (keep text)
+    # Clean raw_images to free memory (keep text only)
     doc.raw_images = []
     for page in doc.pages:
         page.image_data = None

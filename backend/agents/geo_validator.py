@@ -17,7 +17,6 @@ import httpx
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, MAPY_CZ_API_KEY, UPLOAD_DIR
-from google.genai import types
 
 # Max distance in meters before a photo is flagged
 DISTANCE_THRESHOLD_WARN = 500   # 500 m warning
@@ -500,6 +499,7 @@ class GeoValidatorAgent(BaseAgent):
             return None, None
 
         try:
+            from google.genai import types
             parts = [f"Máš {len(images)} fotografií. Vyber tu, která nejlépe ukazuje PŘEDNÍ EXTERIÉR rodinného domu (pohled z ulice).\n\n"]
 
             for img in images:
@@ -541,6 +541,7 @@ class GeoValidatorAgent(BaseAgent):
     ) -> dict | None:
         """Send both images to Gemini for visual comparison."""
         try:
+            from google.genai import types
             self.log("Vizuální porovnání přes Gemini...", "thinking")
 
             with open(uploaded_path, "rb") as f:
@@ -577,6 +578,7 @@ class GeoValidatorAgent(BaseAgent):
     async def _estimate_season(self, images: list) -> dict | None:
         """Estimate season from photo content when EXIF dates are missing."""
         try:
+            from google.genai import types
             # POUZE 3 nejlepší fotky (kvůli OOM Render limitům - 512MB RAM)
             photos_to_send = images[:3]
             parts = [
