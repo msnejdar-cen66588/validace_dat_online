@@ -36,6 +36,63 @@ const PROCESSING_STEPS = [
   { key: 'ready', icon: '✅', label: 'Analýza dokončena', desc: 'Smlouva je připravena k dotazování' },
 ];
 
+// Sub-component: renders page image and overlays highlights after image loads
+function OriginalPageWithHighlights({ pageIndex, sessionId, highlights }: {
+  pageIndex: number;
+  sessionId: string;
+  highlights: { page: number; text: string; y_ratio: number }[];
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageHeight, setImageHeight] = useState(0);
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.target as HTMLImageElement;
+    setImageHeight(img.clientHeight);
+    setImageLoaded(true);
+  };
+
+  // Update height on window resize
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver(() => {
+      const img = containerRef.current?.querySelector('img');
+      if (img) setImageHeight(img.clientHeight);
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className={styles.originalPageContainer} data-page={pageIndex} ref={containerRef}>
+      <img
+        src={getContractPageImageUrl(sessionId, pageIndex)}
+        alt={`Strana ${pageIndex + 1}`}
+        className={styles.originalPageImage}
+        onLoad={handleImageLoad}
+        onError={(e) => {
+          (e.target as HTMLImageElement).style.display = 'none';
+        }}
+      />
+      {imageLoaded && imageHeight > 0 && highlights.map((hp, hIdx) => (
+        <div
+          key={hIdx}
+          className={styles.originalHighlight}
+          style={{
+            top: `${hp.y_ratio * imageHeight}px`,
+          }}
+          title={hp.text}
+        >
+          <div className={styles.originalHighlightBar} />
+          <div className={styles.originalHighlightText}>
+            {hp.text.substring(0, 80)}{hp.text.length > 80 ? '...' : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProps) {
   const [step, setStep] = useState<'upload' | 'processing' | 'analysis'>('upload');
   const [files, setFiles] = useState<File[]>([]);
@@ -997,32 +1054,11 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                         {contractData.total_pages > 1 && (
                           <div className={styles.originalPageLabel}>Strana {i + 1}</div>
                         )}
-                        <div className={styles.originalPageContainer} data-page={i}>
-                          <img
-                            src={getContractPageImageUrl(contractData.session_id, i)}
-                            alt={`Strana ${i + 1}`}
-                            className={styles.originalPageImage}
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = 'none';
-                            }}
-                          />
-                          {/* Highlight overlays */}
-                          {pageHighlights.map((hp, hIdx) => (
-                            <div
-                              key={hIdx}
-                              className={styles.originalHighlight}
-                              style={{
-                                top: `${hp.y_ratio * 100}%`,
-                              }}
-                              title={hp.text}
-                            >
-                              <div className={styles.originalHighlightBar} />
-                              <div className={styles.originalHighlightText}>
-                                {hp.text.substring(0, 80)}{hp.text.length > 80 ? '...' : ''}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                        <OriginalPageWithHighlights
+                          pageIndex={i}
+                          sessionId={contractData.session_id}
+                          highlights={pageHighlights}
+                        />
                       </div>
                     );
                   })}
