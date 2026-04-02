@@ -506,6 +506,8 @@
   padding: 16px;
   overflow-y: auto;
   background: var(--bg-card);
+  min-height: 0;
+  height: 100%;
 }
 
 .contractInfoCard {
