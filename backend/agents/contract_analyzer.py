@@ -123,13 +123,9 @@ class ContractAnalyzerAgent:
 
         contents = []
         contents.append(
-            "DŮLEŽITÉ: Vypiš POUZE text ze smlouvy. NEPŘIDÁVEJ žádný vlastní komentář, úvod ani vysvětlení. "
-            "Začni ROVNOU textem smlouvy. Žádné 'Dobře, zde je přepis...' ani nic podobného.\n\n"
-            "Přepiš VEŠKERÝ text z těchto obrázků smlouvy. "
-            "Zachovej přesně původní formátování, čísla paragrafů, odstavce. "
-            "Pokud je text špatně čitelný, přepiš co nejpřesněji. "
-            "Upozorni na části, které nelze přečíst značkou [nečitelné]. "
-            "Odděl jednotlivé stránky pomocí '--- Strana X ---'."
+            "Přepiš VEŠKERÝ text z obrázků. Zachovej formátování. "
+            "Odděl stránky: '--- Strana X ---'. "
+            "Nečitelné: [nečitelné]. BEZ komentářů, rovnou text."
         )
 
         # Build vision content
@@ -147,14 +143,9 @@ class ContractAnalyzerAgent:
 
         try:
             text = await self.llm.generate_content(
-                system_instruction=(
-                    "Jsi OCR systém. Tvůj výstup obsahuje VÝHRADNĚ přepsaný text z obrázků. "
-                    "NIKDY nepřidávej vlastní komentáře, úvody, vysvětlení ani shrnutí. "
-                    "Začni ROVNOU prvním slovem z dokumentu. "
-                    "Zachováváš formátování, čísla paragrafů, odstavce a strukturu dokumentu."
-                ),
+                system_instruction="OCR systém. Výstup = pouze text z obrázků. Žádné komentáře.",
                 contents=contents,
-                max_output_tokens=8000,
+                max_output_tokens=4000,
                 temperature=0.1,
             )
             return text or ""
@@ -196,7 +187,7 @@ Odpověz POUZE jako JSON:
 }}
 
 TEXT SMLOUVY:
-{text[:6000]}
+{text[:4000]}
 """
         try:
             response = await self.llm.generate_content(
@@ -392,78 +383,35 @@ DOTAZ UŽIVATELE: {query}
         """
         import re
         
-        # Build page reference (truncated to fit 512MB RAM on Render free tier)
+        # Build page reference (truncated for speed + 512MB RAM)
         pages_ref = ""
         for i, pt in enumerate(pages_text):
-            pages_ref += f"\n\n=== STRANA {i+1} ===\n{pt}"
+            pages_ref += f"\n=== STRANA {i+1} ===\n{pt}"
 
-        # Build preset list for the prompt
-        preset_list = "\n".join([f"- {p['label']}: {p['query']}" for p in presets])
+        preset_list = "\n".join([f"- {p['label']}" for p in presets[:10]])
 
-        prompt = f"""Extrahuj VŠECHNY klíčové údaje z této smlouvy do strukturované tabulky.
+        prompt = f"""Extrahuj klíčové údaje ze smlouvy.
 
-TYP SMLOUVY: {contract_type}
+TYP: {contract_type}
+HLEDEJ: {preset_list}
 
-POŽADOVANÉ ÚDAJE (extrahuj minimálně tyto, ale přidej i další důležité):
-{preset_list}
+PRAVIDLA: Přesná hodnota, číslo strany, doslovná citace (20-100 znaků). Pokud nenajdeš: found=false.
 
-KRITICKÁ PRAVIDLA:
-1. Prohledej CELOU smlouvu od začátku do konce — KAŽDOU stranu.
-2. Pro každý údaj uveď PŘESNOU hodnotu — konkrétní číslo, jméno, datum, adresu.
-3. Citace MUSÍ být DOSLOVNÝ kopie textu ze smlouvy (min 20 znaků) — ne parafráze.
-4. U částek uveď PŘESNÝ formát jak je ve smlouvě (včetně Kč, haléřů, slovního vyjádření).
-5. U jmen uveď CELÉ jméno včetně titulů pokud jsou uvedeny.
-6. U rodných čísel uveď ve formátu jak je ve smlouvě.
-7. U dat uveď přesný formát ze smlouvy.
-8. Pokud údaj nenajdeš, nastav found na false a confidence na 0.
-9. Přidej i další důležité údaje, které ve smlouvě najdeš ale nejsou v seznamu výše.
-10. Hledej i IMPLICITNÍ informace (např. pokud je uvedena cena bez DPH a DPH, spočítej celkovou).
+JSON formát:
+{{"fields":[{{"id":"x","label":"Název","value":"Hodnota","page":1,"found":true,"confidence":0.9,"citation":"citace","data_type":"text"}}],"summary":"Shrnutí","red_flags":[{{"severity":"high","title":"Problém","description":"Popis","page":1}}]}}
 
-FORMÁT ODPOVĚDI (JSON):
-{{
-    "fields": [
-        {{
-            "id": "unikatni_id",
-            "label": "Název údaje",
-            "value": "Extrahovaná hodnota",
-            "page": 1,
-            "found": true,
-            "confidence": 0.95,
-            "citation": "DOSLOVNÝ úryvek ze smlouvy (min 20, max 200 znaků)",
-            "data_type": "typ_dat"
-        }}
-    ],
-    "summary": "Stručné shrnutí smlouvy (2-3 věty)",
-    "red_flags": [
-        {{
-            "severity": "high",
-            "title": "Název problému",
-            "description": "Popis nalezeného problému",
-            "page": 1
-        }}
-    ]
-}}
-
-MOŽNÉ data_type: "amount" (částka), "person" (jméno), "date" (datum), "id_number" (RČ/IČO), "address" (adresa), "parcel" (parcela/LV), "text" (jiné)
+data_type: amount/person/date/id_number/address/parcel/text
 
 SMLOUVA:
-{pages_ref[:20000]}
+{pages_ref[:10000]}
 """
         try:
             response = await self.llm.generate_content(
-                system_instruction=(
-                    "Jsi právní AI analytik České spořitelny. "
-                    "Extrahuj VŠECHNA klíčová data ze smlouvy do strukturované tabulky. "
-                    "Buď ABSOLUTNĚ důkladný — nenech žádný důležitý údaj. "
-                    "Citace MUSÍ být doslovné kopie textu — ne parafráze. "
-                    "U částek VŽDY uveď přesné číslo. "
-                    "Identifikuj potenciální problémy (red flags): nesrovnalosti, "
-                    "chybějící podpisy, neobvyklé klauzule, vysoké pokuty, chybějící data."
-                ),
+                system_instruction="Právní AI analytik. Extrahuj data ze smlouvy do JSON tabulky. Buď přesný a stručný.",
                 contents=[prompt],
                 response_mime_type="application/json",
-                max_output_tokens=6000,
-                temperature=0.05,
+                max_output_tokens=3000,
+                temperature=0.1,
             )
             result = json.loads(response)
             

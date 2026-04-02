@@ -453,18 +453,31 @@ export interface ExtractAllResult {
 }
 
 export async function extractAllContractData(sessionId: string, model?: string): Promise<ExtractAllResult> {
-    const res = await fetch(`${API_BASE}/api/contract/extract-all/${sessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
+    
+    try {
+        const res = await fetch(`${API_BASE}/api/contract/extract-all/${sessionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+            signal: controller.signal,
+        });
 
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Extract failed' }));
-        throw new Error(err.detail || 'Extrakce selhala');
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: 'Extract failed' }));
+            throw new Error(err.detail || 'Extrakce selhala');
+        }
+
+        return res.json();
+    } catch (e: any) {
+        if (e.name === 'AbortError') {
+            throw new Error('Extrakce trvala příliš dlouho (>90s). Zkuste menší dokument.');
+        }
+        throw e;
+    } finally {
+        clearTimeout(timeout);
     }
-
-    return res.json();
 }
 
 // ─── Compare Contracts ───
