@@ -399,18 +399,37 @@ async def process_batch_case(
     return result
 
 
-async def run_batch(batch: BatchSession, sessions_store: dict):
+async def run_batch(batch: BatchSession, sessions_store: dict, selected_case_ids: list[str] | None = None):
     """Run all cases in a batch sequentially.
     
     Each case is prepared (images compressed, PDFs parsed) and then
     immediately processed by agents before moving to the next case.
     This gives the user results for each case as fast as possible.
+    
+    If selected_case_ids is provided, only those cases are processed;
+    the rest are skipped and their raw data freed.
     """
     batch.status = "processing"
     batch.start_time = time.time()
 
     # Build the ordered list of rev_ids from raw_cases
-    ordered_rev_ids = sorted(batch.raw_cases.keys())
+    all_rev_ids = sorted(batch.raw_cases.keys())
+
+    # Filter to selected cases if specified
+    if selected_case_ids:
+        selected_rev_ids = []
+        for rev_id in all_rev_ids:
+            case_id = f"{batch.batch_id}_{rev_id}"
+            if case_id in selected_case_ids:
+                selected_rev_ids.append(rev_id)
+            else:
+                # Free raw data for unselected cases
+                if rev_id in batch.raw_cases:
+                    del batch.raw_cases[rev_id]
+        ordered_rev_ids = selected_rev_ids
+    else:
+        ordered_rev_ids = all_rev_ids
+
     total_cases = len(ordered_rev_ids)
 
     # Initialize placeholder cases in the batch for status tracking

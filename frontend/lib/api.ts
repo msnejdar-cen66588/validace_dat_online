@@ -287,10 +287,11 @@ export async function uploadBatch(files: File[], model: string): Promise<BatchUp
     return res.json();
 }
 
-export async function startBatch(batchId: string): Promise<void> {
+export async function startBatch(batchId: string, selectedCaseIds?: string[]): Promise<void> {
     const res = await fetch(`${API_BASE}/api/batch/start/${batchId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selectedCaseIds ? { selected_case_ids: selectedCaseIds } : {}),
     });
 
     if (!res.ok) {

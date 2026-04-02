@@ -1,8 +1,6 @@
 'use client';
-import { useState } from 'react';
 import styles from './BatchDashboard.module.css';
-import ResultsDashboard from './ResultsDashboard';
-import { getBatchCaseResult, type BatchCase, type PipelineResult } from '@/lib/api';
+import { type BatchCase } from '@/lib/api';
 
 interface Props {
     batchId: string;
@@ -43,50 +41,21 @@ export default function BatchDashboard({
     isRunning,
     onReset,
 }: Props) {
-    const [selectedCase, setSelectedCase] = useState<{ case: BatchCase; result: PipelineResult } | null>(null);
-    const [loadingCaseId, setLoadingCaseId] = useState<string | null>(null);
-
     const completedCount = cases.filter(c => c.status === 'completed').length;
     const totalCount = cases.length;
     const progressPercent = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
-    const handleCaseClick = async (c: BatchCase) => {
+    const handleCaseClick = (c: BatchCase) => {
         if (c.status !== 'completed') return;
-        setLoadingCaseId(c.case_id);
-        try {
-            const result = await getBatchCaseResult(batchId, c.case_id);
-            setSelectedCase({ case: c, result });
-        } catch (e) {
-            console.error('Failed to load case result:', e);
-        } finally {
-            setLoadingCaseId(null);
-        }
+        // Open result in a new browser tab
+        const params = new URLSearchParams({
+            batchId,
+            caseId: c.case_id,
+            revId: c.rev_id,
+            address: c.address || '',
+        });
+        window.open(`/batch-result?${params.toString()}`, '_blank');
     };
-
-    // ── Detail view for a single case ──
-    if (selectedCase) {
-        return (
-            <div className={styles.detailOverlay}>
-                <div className={styles.detailHeader}>
-                    <button
-                        className={styles.backBtn}
-                        onClick={() => setSelectedCase(null)}
-                    >
-                        ← Zpět na přehled
-                    </button>
-                    <span className={styles.detailRevId}>REV {selectedCase.case.rev_id}</span>
-                    {selectedCase.case.address && (
-                        <span className={styles.detailAddress}>{selectedCase.case.address}</span>
-                    )}
-                </div>
-                <ResultsDashboard
-                    result={selectedCase.result}
-                    onEdit={() => setSelectedCase(null)}
-                    onReset={() => setSelectedCase(null)}
-                />
-            </div>
-        );
-    }
 
     // ── Main batch dashboard ──
     return (
@@ -184,13 +153,13 @@ export default function BatchDashboard({
                     const isProcessing = c.status === 'processing';
                     const isCompleted = c.status === 'completed';
                     const isActive = isPreparing || isProcessing;
-                    const isLoading = loadingCaseId === c.case_id;
 
                     return (
                         <div
                             key={c.case_id}
                             className={`${styles.caseRow} ${isCompleted ? styles.caseRowCompleted : ''} ${isActive ? styles.caseRowProcessing : ''}`}
                             onClick={() => handleCaseClick(c)}
+                            title={isCompleted ? 'Otevřít výsledky v nové záložce' : undefined}
                         >
                             <div className={`${styles.caseIndex} ${isActive ? styles.caseIndexProcessing : ''} ${isCompleted ? styles.caseIndexCompleted : ''}`}>
                                 {i + 1}
@@ -213,7 +182,6 @@ export default function BatchDashboard({
                             )}
 
                             {isActive && <div className={styles.miniSpinner} />}
-                            {isLoading && <div className={styles.miniSpinner} />}
 
                             {isCompleted && c.semaphore_color && (
                                 <div className={`${styles.caseSemaphore} ${getSemaphoreClass(c.semaphore_color)}`} />
@@ -230,7 +198,11 @@ export default function BatchDashboard({
                             </span>
 
                             {isCompleted && (
-                                <span className={styles.caseArrow}>→</span>
+                                <span className={styles.caseArrow}>
+                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                                        <path d="M3 11L11 3M11 3H5M11 3V9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                </span>
                             )}
                         </div>
                     );

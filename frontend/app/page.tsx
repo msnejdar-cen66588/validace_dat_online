@@ -42,7 +42,7 @@ const DATA_LABELS: Record<keyof PropertyData, string> = {
 };
 
 export default function Home() {
-  const [step, setStep] = useState<'upload' | 'processing' | 'pipeline' | 'results' | 'batch'>('upload');
+  const [step, setStep] = useState<'upload' | 'processing' | 'pipeline' | 'results' | 'batch-select' | 'batch'>('upload');
   const [processingPhase, setProcessingPhase] = useState<'uploading' | 'compressing' | 'starting' | 'ready'>('uploading');
   const [files, setFiles] = useState<File[]>([]);
   const [yearBuilt, setYearBuilt] = useState('');
@@ -83,6 +83,7 @@ export default function Home() {
   const [batchCases, setBatchCases] = useState<BatchCase[]>([]);
   const [batchUploading, setBatchUploading] = useState(false);
   const batchInputRef = useRef<HTMLInputElement>(null);
+  const [selectedBatchCaseIds, setSelectedBatchCaseIds] = useState<Set<string>>(new Set());
 
   const ws = useWebSocket(sessionId);
   const batchWs = useBatchWebSocket(batchId);
@@ -269,26 +270,37 @@ export default function Home() {
     setPipelineResult(finalResult);
   }
 
-  // Batch upload handler
+  // Batch upload handler — only uploads files and shows selection screen
   const handleBatchUpload = async (fileList: FileList) => {
     const filesArr = Array.from(fileList);
     if (filesArr.length === 0) return;
     setBatchUploading(true);
     setError(null);
-    setProcessingPhase('uploading');
-    setStep('processing');
     try {
       const result = await uploadBatch(filesArr, selectedModel);
       setBatchId(result.batch_id);
       setBatchCases(result.cases);
-      // Start batch processing (preparation + agents happen sequentially per case)
-      await startBatch(result.batch_id);
-      setStep('batch');
+      // Select all cases by default
+      setSelectedBatchCaseIds(new Set(result.cases.map(c => c.case_id)));
+      setStep('batch-select');
     } catch (e: any) {
       setError(e.message || 'Chyba při hromadném nahrávání');
       setStep('upload');
     } finally {
       setBatchUploading(false);
+    }
+  };
+
+  // Start batch processing with selected cases
+  const handleStartBatch = async () => {
+    if (!batchId) return;
+    setError(null);
+    try {
+      const selectedIds = Array.from(selectedBatchCaseIds);
+      await startBatch(batchId, selectedIds.length < batchCases.length ? selectedIds : undefined);
+      setStep('batch');
+    } catch (e: any) {
+      setError(e.message || 'Chyba při spouštění hromadné kontroly');
     }
   };
 
@@ -372,7 +384,7 @@ export default function Home() {
             </div>
             <div className={styles.stepLine} />
             <div
-              className={`${styles.step} ${(step === 'processing' || step === 'pipeline' || step === 'batch') ? styles.stepActive : ''} ${step === 'results' ? styles.stepDone : ''}`}>
+              className={`${styles.step} ${(step === 'processing' || step === 'pipeline' || step === 'batch-select' || step === 'batch') ? styles.stepActive : ''} ${step === 'results' ? styles.stepDone : ''}`}>
               <span className={styles.stepNum}>2</span>Analýza
             </div>
             <div className={styles.stepLine} />
@@ -878,12 +890,29 @@ export default function Home() {
           {/* Batch Upload Mode */}
           {mode === 'batch' && (
             <div className={styles.batchUploadZone}>
-              <div className={styles.folderDropZone} onClick={() => batchInputRef.current?.click()}>
-                <input ref={batchInputRef} type="file" {...{webkitdirectory: 'true', directory: 'true'} as any} multiple onChange={(e) => e.target.files && handleBatchUpload(e.target.files)} className={styles.fileInput} />
-                <div className={styles.folderDropIcon}>📁</div>
-                <p className={styles.folderDropText}>Vyberte složku s podklady</p>
-                <p className={styles.folderDropHint}>Složka s podsložkami (1, 2, 3...) — každá obsahuje fotky + PDF formulář + LV</p>
-              </div>
+              {batchUploading ? (
+                <div className={styles.folderDropZone} style={{ pointerEvents: 'none', opacity: 0.7 }}>
+                  <div style={{
+                    width: '36px',
+                    height: '36px',
+                    border: '3px solid rgba(40, 112, 237, 0.15)',
+                    borderTopColor: '#2870ED',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                    margin: '0 auto 12px',
+                  }} />
+                  <p className={styles.folderDropText}>Nahrávám a třídím soubory...</p>
+                  <p className={styles.folderDropHint}>Toto může chvíli trvat u větších složek</p>
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                </div>
+              ) : (
+                <div className={styles.folderDropZone} onClick={() => batchInputRef.current?.click()}>
+                  <input ref={batchInputRef} type="file" {...{webkitdirectory: 'true', directory: 'true'} as any} multiple onChange={(e) => e.target.files && handleBatchUpload(e.target.files)} className={styles.fileInput} />
+                  <div className={styles.folderDropIcon}>📁</div>
+                  <p className={styles.folderDropText}>Vyberte složku s podklady</p>
+                  <p className={styles.folderDropHint}>Složka s podsložkami (1, 2, 3...) — každá obsahuje fotky + PDF formulář + LV</p>
+                </div>
+              )}
               {error && <div className={styles.error}>{error}</div>}
             </div>
           )}
@@ -931,6 +960,175 @@ export default function Home() {
           }}
         />
         )}
+
+      {/* Batch Case Selection */}
+      {step === 'batch-select' && batchId && (
+        <section style={{ maxWidth: '900px', margin: '0 auto', padding: '24px' }}>
+          <div style={{
+            background: 'var(--surface-card)',
+            borderRadius: '16px',
+            border: '1px solid var(--border-subtle)',
+            padding: '28px 32px',
+          }}>
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: 700,
+              color: 'var(--text-primary)',
+              marginBottom: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+            }}>
+              <span style={{ fontSize: '22px' }}>📁</span>
+              Hromadná kontrola — výběr případů
+            </h2>
+            <p style={{
+              fontSize: '13px',
+              color: 'var(--text-muted)',
+              marginBottom: '20px',
+            }}>
+              Nalezeno {batchCases.length} {batchCases.length === 1 ? 'případ' : batchCases.length < 5 ? 'případy' : 'případů'}
+              &nbsp;• Vyberte, které chcete analyzovat
+            </p>
+
+            {/* Select all / deselect all */}
+            <div style={{
+              display: 'flex',
+              gap: '12px',
+              marginBottom: '16px',
+            }}>
+              <button
+                onClick={() => setSelectedBatchCaseIds(new Set(batchCases.map(c => c.case_id)))}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '8px',
+                  background: selectedBatchCaseIds.size === batchCases.length
+                    ? 'rgba(40,112,237,0.08)'
+                    : 'var(--surface-card)',
+                  color: selectedBatchCaseIds.size === batchCases.length
+                    ? '#2870ED'
+                    : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                ✓ Vybrat vše
+              </button>
+              <button
+                onClick={() => setSelectedBatchCaseIds(new Set())}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '8px',
+                  background: 'var(--surface-card)',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                Odznačit vše
+              </button>
+            </div>
+
+            {/* Case list with checkboxes */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '24px' }}>
+              {batchCases.map((c) => {
+                const isSelected = selectedBatchCaseIds.has(c.case_id);
+                return (
+                  <label
+                    key={c.case_id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '14px',
+                      padding: '12px 16px',
+                      background: isSelected ? 'rgba(40,112,237,0.04)' : '#F8FAFC',
+                      border: isSelected
+                        ? '1px solid rgba(40,112,237,0.3)'
+                        : '1px solid var(--border-subtle, #e2e8f0)',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {
+                        setSelectedBatchCaseIds(prev => {
+                          const next = new Set(prev);
+                          if (next.has(c.case_id)) next.delete(c.case_id);
+                          else next.add(c.case_id);
+                          return next;
+                        });
+                      }}
+                      style={{ accentColor: '#2870ED', width: '16px', height: '16px' }}
+                    />
+                    <span style={{
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      color: 'var(--text-primary)',
+                      minWidth: '80px',
+                    }}>
+                      REV {c.rev_id}
+                    </span>
+                    {c.file_counts && (
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        📷 {c.file_counts.images} fotek • 📄 {c.file_counts.pdfs} PDF
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+
+            {error && <div className={styles.error}>{error}</div>}
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => {
+                  setStep('upload');
+                  setBatchId(null);
+                  setBatchCases([]);
+                  setError(null);
+                }}
+                style={{
+                  flex: '0 0 auto',
+                  padding: '14px 24px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '10px',
+                  background: 'var(--surface-card)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                ← Zpět
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleStartBatch}
+                disabled={selectedBatchCaseIds.size === 0}
+                style={{
+                  flex: 1,
+                  justifyContent: 'center',
+                  padding: '14px',
+                  fontSize: '15px',
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M6 3L14 9L6 15V3Z" fill="currentColor" />
+                </svg>
+                Spustit hromadnou kontrolu ({selectedBatchCaseIds.size} {selectedBatchCaseIds.size === 1 ? 'případ' : selectedBatchCaseIds.size < 5 ? 'případy' : 'případů'})
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Batch Dashboard */}
       {step === 'batch' && batchId && (

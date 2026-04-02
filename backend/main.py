@@ -636,14 +636,18 @@ async def batch_upload(
 async def start_batch_pipeline(
     batch_id: str,
     background_tasks: BackgroundTasks,
+    body: dict = Body(default={}),
 ):
-    """Start sequential processing of all cases in a batch."""
+    """Start sequential processing of all (or selected) cases in a batch."""
     batch = batch_sessions.get(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found.")
 
     if batch.status == "processing":
         raise HTTPException(status_code=400, detail="Batch is already processing.")
+
+    # Optional: only process selected case IDs
+    selected_case_ids = body.get("selected_case_ids") if body else None
 
     # Attach any websockets that connected before start
     if batch_id in batch_websockets:
@@ -654,7 +658,7 @@ async def start_batch_pipeline(
     async def _run():
         try:
             # run_batch now handles preparation + processing + session storage
-            await run_batch(batch, sessions)
+            await run_batch(batch, sessions, selected_case_ids=selected_case_ids)
         except Exception as e:
             import traceback
             print(f"[Batch] Fatal error: {e}")

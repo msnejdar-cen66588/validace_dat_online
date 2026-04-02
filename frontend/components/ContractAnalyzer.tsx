@@ -108,6 +108,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
   const [processingPhase, setProcessingPhase] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [viewMode, setViewMode] = useState<'text' | 'original' | 'pdf'>('text');
+  const [pdfHash, setPdfHash] = useState('');
   const [panelWidth, setPanelWidth] = useState(380);
   const [isResizing, setIsResizing] = useState(false);
   
@@ -369,6 +370,10 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
       if (pos) {
         scrollToOriginalHighlight(pos.page, pos.y_ratio);
       }
+    } else if (viewMode === 'pdf') {
+      // Make native browser PDF viewer scroll and highlight
+      const queryStr = citationText.replace(/\n/g, ' ').substring(0, 40).trim();
+      setPdfHash(`#page=${page + 1}&search="${encodeURIComponent(queryStr)}"`);
     } else {
       setTimeout(() => scrollToHighlight(citationText), 200);
     }
@@ -1070,7 +1075,7 @@ export default function ContractAnalyzer({ selectedModel }: ContractAnalyzerProp
                 </div>
               ) : (
                 <iframe
-                  src={getContractPdfUrl(contractData.session_id)}
+                  src={`${getContractPdfUrl(contractData.session_id)}${pdfHash}`}
                   className={styles.pdfViewer}
                   title="Contract PDF"
                 />
