@@ -38,7 +38,7 @@ def classify_pdf(filename: str) -> str:
 
 # ── Subfolder grouping from webkitdirectory upload ─────────────────────────
 
-def group_files_by_subfolder(filenames: list[str], file_bytes_map: dict[str, bytes]) -> dict[str, dict]:
+def group_files_by_subfolder(filenames: list[str], file_paths_map: dict[str, str]) -> dict[str, dict]:
     """Group uploaded files by their immediate subfolder.
 
     webkitdirectory sends relative paths like: 'batch/01/photo.jpg', 'batch/02/lv.pdf'
@@ -48,7 +48,7 @@ def group_files_by_subfolder(filenames: list[str], file_bytes_map: dict[str, byt
     """
     cases: dict[str, dict] = {}
 
-    for filepath, fbytes in file_bytes_map.items():
+    for filepath, temp_path in file_paths_map.items():
         # Normalize path separators
         parts = filepath.replace("\\", "/").split("/")
 
@@ -77,12 +77,12 @@ def group_files_by_subfolder(filenames: list[str], file_bytes_map: dict[str, byt
 
         ext = os.path.splitext(filename)[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
-            cases[subfolder]["images"].append((filename, fbytes))
+            cases[subfolder]["images"].append((filename, temp_path))
         elif ext == ".pdf":
             pdf_type = classify_pdf(filename)
             cases[subfolder]["pdfs"].append({
                 "filename": filename,
-                "bytes": fbytes,
+                "temp_path": temp_path,
                 "type": pdf_type,
             })
 
@@ -188,11 +188,24 @@ async def prepare_single_case(
             tasks.clear()
             gc.collect()
 
-    for filename, fbytes in case_data.get("images", []):
+    for filename, temp_path in case_data.get("images", []):
+        try:
+            with open(temp_path, "rb") as f:
+                fbytes = f.read()
+        except FileNotFoundError:
+            continue
+
         # Skip files > 15MB to prevent OOM on free tier
         if len(fbytes) > 15_000_000:
+            os.remove(temp_path)
             continue
+            
         tasks.append(preprocessor.process_file(filename, fbytes))
+        
+        # Free temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
         if len(tasks) >= 3:  # batch of 3 – same as single upload (7MB/img after downscale)
             await flush_tasks()
 
@@ -206,8 +219,11 @@ async def prepare_single_case(
     # ── Process PDFs embedded photos (batched, max 4 images per PDF) ──
     for pdf_info in case_data.get("pdfs", []):
         if pdf_info["type"] == "unknown":
+            temp_path = pdf_info["temp_path"]
             try:
-                reader = PdfReader(io.BytesIO(pdf_info["bytes"]))
+                with open(temp_path, "rb") as f:
+                    pdf_bytes = f.read()
+                reader = PdfReader(io.BytesIO(pdf_bytes))
                 img_count = 0
                 for page_num, page in enumerate(reader.pages):
                     for img_idx, img_obj in enumerate(page.images):
@@ -226,9 +242,9 @@ async def prepare_single_case(
                 gc.collect()
             except Exception:
                 pass
-            # Free the PDF bytes for unknown type after extracting images
-            pdf_info["bytes"] = b""
-            gc.collect()
+            # Free the temp PDF file after extracting images
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     # Flush remaining PDF image tasks
     await flush_tasks()
@@ -237,14 +253,18 @@ async def prepare_single_case(
     property_data = None
     for pdf_info in case_data.get("pdfs", []):
         if pdf_info["type"] == "formular":
+            temp_path = pdf_info["temp_path"]
             try:
-                parsed = await asyncio.to_thread(parse_pdf, pdf_info["bytes"])
+                with open(temp_path, "rb") as f:
+                    pdf_bytes = f.read()
+                parsed = await asyncio.to_thread(parse_pdf, pdf_bytes)
                 if not parsed.is_empty():
                     property_data = parsed.to_dict()
             except Exception as e:
                 print(f"[Batch] Error parsing form PDF in {rev_id}: {e}")
-            # Free bytes after parsing
-            pdf_info["bytes"] = b""
+            # Free temp file after parsing
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
             gc.collect()
             break
 
@@ -253,14 +273,20 @@ async def prepare_single_case(
     selected_parcels = None
     for pdf_info in case_data.get("pdfs", []):
         if pdf_info["type"] == "lv":
+            temp_path = pdf_info["temp_path"]
             try:
+                with open(temp_path, "rb") as f:
+                    pdf_bytes = f.read()
+                
+                lv_parsed = await asyncio.to_thread(parse_lv, pdf_bytes)
+                lv_data = lv_parsed.to_dict()
+                
+                # Save to session dir for later use
                 lv_path = os.path.join(session_dir, "lv.pdf")
                 with open(lv_path, "wb") as f:
-                    f.write(pdf_info["bytes"])
+                    f.write(pdf_bytes)
                 lv_pdf_path = lv_path
 
-                lv_parsed = await asyncio.to_thread(parse_lv, pdf_info["bytes"])
-                lv_data = lv_parsed.to_dict()
                 # All parcels auto-selected
                 if lv_data and "parcels" in lv_data:
                     selected_parcels = [p["parcel_number"] for p in lv_data["parcels"]]
@@ -273,8 +299,9 @@ async def prepare_single_case(
                         property_data["plocha_pozemku"] = str(total_area)
             except Exception as e:
                 print(f"[Batch] Error parsing LV in {rev_id}: {e}")
-            # Free bytes after parsing (saved to disk already)
-            pdf_info["bytes"] = b""
+            # Free temp file after processing LV
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
             gc.collect()
             break
 
@@ -423,8 +450,13 @@ async def run_batch(batch: BatchSession, sessions_store: dict, selected_case_ids
             if case_id in selected_case_ids:
                 selected_rev_ids.append(rev_id)
             else:
-                # Free raw data for unselected cases
+                # Free raw data and temp files for unselected cases
                 if rev_id in batch.raw_cases:
+                    case_data = batch.raw_cases[rev_id]
+                    for _, tp in case_data.get("images", []):
+                        if os.path.exists(tp): os.remove(tp)
+                    for pdf_info in case_data.get("pdfs", []):
+                        if os.path.exists(pdf_info["temp_path"]): os.remove(pdf_info["temp_path"])
                     del batch.raw_cases[rev_id]
         ordered_rev_ids = selected_rev_ids
     else:

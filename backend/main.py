@@ -3,6 +3,7 @@ import os
 import uuid
 import json
 import gc
+import shutil
 from typing import Optional
 
 import io
@@ -572,19 +573,27 @@ async def batch_upload(
     """
     batch_id = str(uuid.uuid4())[:8]
 
-    # Read all files into memory, keyed by their webkitRelativePath
-    file_bytes_map: dict[str, bytes] = {}
+    # Read all files and save them to a temporary disk location to prevent OOM
+    batch_dir = os.path.join(UPLOAD_DIR, "batch_temp", batch_id)
+    os.makedirs(batch_dir, exist_ok=True)
+    
+    file_paths_map: dict[str, str] = {}
     for f in files:
         if not f.filename:
             continue
-        fbytes = await f.read()
-        file_bytes_map[f.filename] = fbytes
+        # Save to disk instead of memory
+        safe_filename = str(uuid.uuid4()) + "_" + os.path.basename(f.filename)
+        safe_path = os.path.join(batch_dir, safe_filename)
+        with open(safe_path, "wb") as out_file:
+            shutil.copyfileobj(f.file, out_file)
+            
+        file_paths_map[f.filename] = safe_path
 
-    if not file_bytes_map:
+    if not file_paths_map:
         raise HTTPException(status_code=400, detail="Žádné soubory nebyly nahrány.")
 
-    # Group by subfolder
-    raw_cases = group_files_by_subfolder(list(file_bytes_map.keys()), file_bytes_map)
+    # Group by subfolder (using paths now)
+    raw_cases = group_files_by_subfolder(list(file_paths_map.keys()), file_paths_map)
 
     if not raw_cases:
         raise HTTPException(status_code=400, detail="Nebyly nalezeny žádné podsložky s podklady.")
@@ -612,8 +621,8 @@ async def batch_upload(
 
     batch_sessions[batch_id] = batch
 
-    # Free the map (raw_cases holds refs to byte data now)
-    del file_bytes_map
+    # Free the map (raw_cases holds refs to temp paths now)
+    del file_paths_map
     gc.collect()
 
     return {
