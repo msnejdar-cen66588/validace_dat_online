@@ -21,13 +21,13 @@ from config import UPLOAD_DIR
 # ── Povinné rozsahy koeficientů (sdílené mezi sanitize i compute) ─────────────
 COEFFICIENT_RANGES = {
     "k1": (0.80, 0.90),   # Redukce pramene ceny (vždy ~0.85 for inzerce)
-    "k2": (0.90, 1.10),   # Velikost objektu
-    "k3": (0.90, 1.10),   # Poloha
-    "k4": (0.85, 1.15),   # Provedení / vybavení
-    "k5": (0.80, 1.20),   # Celkový stav
-    "k6": (0.90, 1.10),   # Vliv pozemku
-    "k7": (0.95, 1.05),   # Úvaha znalce
-    "k8": (0.95, 1.05),   # Energetická náročnost
+    "k2": (0.50, 2.00),   # Velikost objektu
+    "k3": (0.50, 2.00),   # Poloha
+    "k4": (0.50, 2.00),   # Provedení / vybavení
+    "k5": (0.50, 2.00),   # Celkový stav
+    "k6": (0.50, 2.00),   # Vliv pozemku
+    "k7": (0.50, 2.00),   # Úvaha znalce
+    "k8": (0.50, 2.00),   # Energetická náročnost
 }
 
 
@@ -104,17 +104,17 @@ Koeficienty vyjadřují poměr VZORKU k NAŠEMU domu:
 • K < 1.00 → vzorek je v této vlastnosti LEPŠÍ než náš dům
 • K > 1.00 → vzorek je v této vlastnosti HORŠÍ než náš dům
 
-POVINNÉ ROZSAHY (STRIKTNĚ dodržuj!):
+POVINNÉ ROZSAHY:
 • K1 (Redukce pramene ceny) = VŽDY 0.85 pro inzerátové ceny
-• K2 (Velikost objektu):   0.90 – 1.10
-• K3 (Poloha):             0.90 – 1.10
-• K4 (Provedení/vybavení): 0.85 – 1.15
+• K2 (Velikost objektu):   0.50 – 2.00
+• K3 (Poloha):             0.50 – 2.00
+• K4 (Provedení/vybavení): 0.50 – 2.00
   → POROVNEJ fotky vzorku vs. oceňovaného domu!
-• K5 (Celkový stav):       0.80 – 1.20
+• K5 (Celkový stav):       0.50 – 2.00
   → POROVNEJ fotky vzorku vs. oceňovaného domu + využij pole "stav" vzorku!
-• K6 (Vliv pozemku):       0.90 – 1.10
-• K7 (Úvaha znalce):       0.95 – 1.05
-• K8 (Energ. náročnost):   0.95 – 1.05
+• K6 (Vliv pozemku):       0.50 – 2.00
+• K7 (Úvaha znalce):       0.50 – 2.00
+• K8 (Energ. náročnost):   0.50 – 2.00
 
 ⚠️ K1 musí být VŽDY 0.85! Toto je standardní redukce za inzerční cenu.
 
@@ -576,6 +576,15 @@ class OdhadceAgent(BaseAgent):
             lat, lon, floor_area_int, district_id, total_count=20
         )
 
+        # Basic Sreality typo prevention (e.g., house area = 1 m2)
+        valid_samples = []
+        for s in raw_samples:
+            area = max(s.get("velikost_domu_m2") or floor_area_int, 10)
+            jc = s["cena_czk"] / area
+            if 10_000 <= jc <= 250_000:
+                valid_samples.append(s)
+        raw_samples = valid_samples
+
         if len(raw_samples) < 3:
             msg = "Pro zpracování online ocenění se nepodařilo najít dostatek srovnatelných vzorků."
             self.log(msg, "warn")
@@ -763,14 +772,13 @@ class OdhadceAgent(BaseAgent):
                     errors=["Výpočet NHZP selhal."]
                 )
 
-            # ── Sanity checks ────────────────────────────────────────────────
+            # ── Sanity checks (Warnings only, no hard capping) ───────────────
             warnings = []
             if nhzp > 25_000_000:
-                warnings.append(f"NHZP {nhzp:,.0f} Kč je neobvykle vysoká pro běžný RD.")
+                warnings.append(f"Upozornění: NHZP {nhzp:,.0f} Kč je neobvykle vysoká pro běžný rodinný dům.")
             if nhzp < 500_000:
-                warnings.append(f"NHZP {nhzp:,.0f} Kč je neobvykle nízká.")
+                warnings.append(f"Upozornění: NHZP {nhzp:,.0f} Kč je extrémně nízká.")
 
-            # Cap at max selected sample price × 1.15
             ai_vzorky_by_id = {v["id"]: v for v in ai_vzorky}
             selected_ids = set(ai_vzorky_by_id.keys())
             selected_raw = [s for s in raw_samples if s["id"] in selected_ids]
@@ -778,23 +786,16 @@ class OdhadceAgent(BaseAgent):
                 selected_raw = raw_samples
 
             max_sample_price = max((s["cena_czk"] for s in selected_raw), default=0)
-            max_reasonable = int(max_sample_price * 1.15)
-            if nhzp > max_reasonable and max_reasonable > 0:
+            if nhzp > max_sample_price * 1.5 and max_sample_price > 0:
                 warnings.append(
-                    f"NHZP {nhzp:,.0f} Kč překračovala max. cenu vybraného vzorku ({max_sample_price:,.0f} Kč). "
-                    f"Zastropováno na {max_reasonable:,.0f} Kč."
+                    f"Tržní odhad ({nhzp:,.0f} Kč) výrazně převyšuje cenu nejdražšího vybraného srovnávacího vzorku ({max_sample_price:,.0f} Kč). Zkontrolujte upravené koeficienty."
                 )
-                nhzp = max_reasonable
 
-            # Floor check: should not be below 30% of min sample price
             min_sample_price = min((s["cena_czk"] for s in selected_raw), default=0)
-            min_reasonable = int(min_sample_price * 0.30)
-            if nhzp < min_reasonable and min_reasonable > 0:
+            if nhzp < min_sample_price * 0.5 and min_sample_price > 0:
                 warnings.append(
-                    f"NHZP {nhzp:,.0f} Kč byla pod 30 % min. ceny vzorku ({min_sample_price:,.0f} Kč). "
-                    f"Dno nastaveno na {min_reasonable:,.0f} Kč."
+                    f"Tržní odhad ({nhzp:,.0f} Kč) je o více než 50 % nižší než cena nejlevnějšího srovnávacího vzorku ({min_sample_price:,.0f} Kč). Zkontrolujte upravené koeficienty."
                 )
-                nhzp = min_reasonable
 
             odhad_m = nhzp / 1_000_000
 
@@ -950,9 +951,10 @@ class OdhadceAgent(BaseAgent):
         # Use MEDIAN for robustness against outliers
         median_jc = statistics.median(upravene_jc_list)
         nhzp = round(median_jc * floor_area_int)
-        # Price range: ±15 % from median (realistic interval, not raw min/max)
-        nhzp_min = round(nhzp * 0.85)
-        nhzp_max = round(nhzp * 1.15)
+        
+        # Price range: from minimum to maximum modified unit price
+        nhzp_min = round(min(upravene_jc_list) * floor_area_int)
+        nhzp_max = round(max(upravene_jc_list) * floor_area_int)
 
         return {
             "nhzp": nhzp,
