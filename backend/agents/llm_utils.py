@@ -8,7 +8,7 @@ import httpx
 from config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 
 def robust_json_parse(text: str) -> dict:
-    """Attempt to parse JSON, fixing common LLM formatting errors like unescaped newlines in strings."""
+    """Attempt to parse JSON, fixing common LLM formatting errors and truncated outputs."""
     if not text:
         return {}
     
@@ -25,28 +25,75 @@ def robust_json_parse(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to fix unescaped newlines inside strings (common with Gemini)
-        in_string = False
-        escaped = False
-        result = []
-        for char in text:
-            if char == '"' and not escaped:
-                in_string = not in_string
+        pass  # Fall back to robust parser
+
+    # Step 1: Fix unescaped newlines inside strings (Gemini common error)
+    in_string = False
+    escaped = False
+    result = []
+    for char in text:
+        if char == '"' and not escaped:
+            in_string = not in_string
+        
+        if in_string and char == '\n':
+            result.append('\\n')
+        elif in_string and char == '\r':
+            pass
+        else:
+            result.append(char)
             
-            if in_string and char == '\n':
-                result.append(' ')
-            elif in_string and char == '\r':
-                pass
-            else:
-                result.append(char)
-                
-            if char == '\\':
-                escaped = not escaped
-            else:
-                escaped = False
-                
-        fixed_text = "".join(result)
+        if char == '\\':
+            escaped = not escaped
+        else:
+            escaped = False
+            
+    fixed_text = "".join(result)
+    
+    try:
         return json.loads(fixed_text)
+    except json.JSONDecodeError:
+        pass  # Fall back to truncation recovery
+
+    # Step 2: Stack-based truncation recovery
+    # Removes trailing commas and closes all open strings, arrays, and objects.
+    fixed_text = fixed_text.rstrip()
+    if fixed_text.endswith(','):
+        fixed_text = fixed_text[:-1]
+
+    in_str = False
+    escaped = False
+    stack = []
+    
+    for char in fixed_text:
+        if char == '"' and not escaped:
+            in_str = not in_str
+        elif not in_str:
+            if char == '{':
+                stack.append('}')
+            elif char == '[':
+                stack.append(']')
+            elif char == '}' and stack and stack[-1] == '}':
+                stack.pop()
+            elif char == ']' and stack and stack[-1] == ']':
+                stack.pop()
+                
+        if char == '\\':
+            escaped = not escaped
+        else:
+            escaped = False
+
+    append_str = ""
+    if in_str:
+        append_str += '"'
+    
+    while stack:
+        append_str += stack.pop()
+        
+    try:
+        return json.loads(fixed_text + append_str)
+    except Exception as e:
+        print(f"Robust parse failed even with recovery: {e}")
+        return {}
 
 class LLMClient:
     """Unified client for interacting with different LLM providers."""

@@ -183,7 +183,7 @@ class ForenzniAnalytikAgent(BaseAgent):
                 system_instruction=self.system_prompt,
                 contents=parts,
                 response_mime_type="application/json",
-                max_output_tokens=3000,
+                max_output_tokens=8000,
             )
 
             ai_result = robust_json_parse(response_text)
