@@ -14,7 +14,7 @@ import statistics
 
 import httpx
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import UPLOAD_DIR
 
 
@@ -738,16 +738,7 @@ class OdhadceAgent(BaseAgent):
                 temperature=0.3,
             )
 
-            # Strip markdown wrapping if present
-            raw_text = response_text.strip()
-            for prefix in ("```json", "```"):
-                if raw_text.startswith(prefix):
-                    raw_text = raw_text[len(prefix):]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            raw_text = raw_text.strip()
-
-            result_json = json.loads(raw_text)
+            result_json = robust_json_parse(response_text)
 
             # ── Compute NHZP from coefficients (backend is authoritative) ────
             ai_vzorky = result_json.get("vzorky", [])

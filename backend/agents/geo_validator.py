@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import GEMINI_API_KEY, GEMINI_MODEL, MAPY_CZ_API_KEY, UPLOAD_DIR
 
 # Max distance in meters before a photo is flagged
@@ -518,7 +518,7 @@ class GeoValidatorAgent(BaseAgent):
                 max_output_tokens=300,
             )
 
-            result = json.loads(response_text)
+            result = robust_json_parse(response_text)
             selected_id = result.get("photo_id")
             reason = result.get("reason", "")
 
@@ -565,7 +565,7 @@ class GeoValidatorAgent(BaseAgent):
                 max_output_tokens=1500,
             )
 
-            result = json.loads(response_text)
+            result = robust_json_parse(response_text)
             self.log(f"Vizuální verdikt: {result.get('match_verdict', '?')} "
                      f"(confidence: {result.get('confidence', '?')})")
             return result
@@ -602,7 +602,7 @@ class GeoValidatorAgent(BaseAgent):
                 max_output_tokens=800,
             )
 
-            return json.loads(response_text)
+            return robust_json_parse(response_text)
 
         except Exception as e:
             self.log(f"Chyba odhadu ročního období: {e}", "warn")

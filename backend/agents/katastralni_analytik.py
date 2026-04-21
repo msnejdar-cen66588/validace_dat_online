@@ -13,7 +13,7 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont
 
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import GEMINI_API_KEY, GEMINI_MODEL, UPLOAD_DIR
 from lv_parser import parse_lv, LVData
 
@@ -276,7 +276,7 @@ class KatastralniAnalytikAgent(BaseAgent):
                 response_mime_type="application/json",
                 max_output_tokens=3000,
             )
-            result = json.loads(response_text)
+            result = robust_json_parse(response_text)
             self.log(f"LV rizika: {result.get('overall_risk_level', '?')}")
             return result
         except Exception as e:
@@ -568,7 +568,7 @@ class KatastralniAnalytikAgent(BaseAgent):
                 max_output_tokens=2000,
             )
 
-            result = json.loads(response_text)
+            result = robust_json_parse(response_text)
             detected = result.get("buildings_detected", [])
             self.log(f"Ortofoto analýza: {len(detected)} nezakreslených staveb detekováno")
             return result

@@ -11,7 +11,7 @@ import json
 from typing import Optional
 from dataclasses import dataclass, field
 
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 
 
 # Predefined presets for each contract type
@@ -202,7 +202,7 @@ TEXT SMLOUVY:
                 max_output_tokens=1500,
                 temperature=0.2,
             )
-            result = json.loads(response)
+            result = robust_json_parse(response)
             contract_type = result.get("contract_type", "unknown")
 
             # Get icon and label from static config
@@ -290,7 +290,7 @@ DOTAZ UŽIVATELE: {query}
                 max_output_tokens=2048,
                 temperature=0.1,
             )
-            result = json.loads(response)
+            result = robust_json_parse(response)
 
             # Find text positions for highlighting
             highlights = result.get("highlights", [])
@@ -413,7 +413,7 @@ SMLOUVA:
                 max_output_tokens=3000,
                 temperature=0.1,
             )
-            result = json.loads(response)
+            result = robust_json_parse(response)
             
             # ═══ PHASE 2: Post-processing verification ═══
             fields = result.get("fields", [])
@@ -613,7 +613,7 @@ Odpověz jako JSON:
                 max_output_tokens=4000,
                 temperature=0.1,
             )
-            return json.loads(response)
+            return robust_json_parse(response)
         except Exception as e:
             print(f"[ContractAnalyzer] Compare error: {e}")
             return {

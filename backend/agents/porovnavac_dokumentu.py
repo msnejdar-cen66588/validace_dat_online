@@ -5,7 +5,7 @@ which evaluates whether the photos match the declared property characteristics.
 """
 import json
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 COMPARATOR_SYSTEM_PROMPT = """Jsi expert na validaci nemovitostí. Tvým úkolem je porovnat údaje z formuláře
@@ -174,7 +174,7 @@ class PorovnavacDokumentuAgent(BaseAgent):
             )
 
             self.log("AI porovnání dokončeno.", "info")
-            ai_result = json.loads(response_text)
+            ai_result = robust_json_parse(response_text)
 
             verdict = ai_result.get("verdict", "UNKNOWN")
             confidence = ai_result.get("confidence", 0.0)
