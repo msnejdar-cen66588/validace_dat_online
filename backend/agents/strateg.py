@@ -8,7 +8,7 @@ Final decision-maker:
 """
 import json
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL
 )
@@ -210,8 +210,8 @@ class StrategAgent(BaseAgent):
                 max_output_tokens=1500,
             )
 
-            report = response_text.strip()
-            self.log("Report vygenerován.")
+            ai_result = robust_json_parse(response_text)
+            self.log("Strateg aggregation complete.", "info")
             return report
 
         except Exception as e:

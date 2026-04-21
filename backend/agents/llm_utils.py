@@ -7,6 +7,47 @@ from typing import Optional, List, Any, Union
 import httpx
 from config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 
+def robust_json_parse(text: str) -> dict:
+    """Attempt to parse JSON, fixing common LLM formatting errors like unescaped newlines in strings."""
+    if not text:
+        return {}
+    
+    # Strip markdown code blocks
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Try to fix unescaped newlines inside strings (common with Gemini)
+        in_string = False
+        escaped = False
+        result = []
+        for char in text:
+            if char == '"' and not escaped:
+                in_string = not in_string
+            
+            if in_string and char == '\n':
+                result.append(' ')
+            elif in_string and char == '\r':
+                pass
+            else:
+                result.append(char)
+                
+            if char == '\\':
+                escaped = not escaped
+            else:
+                escaped = False
+                
+        fixed_text = "".join(result)
+        return json.loads(fixed_text)
+
 class LLMClient:
     """Unified client for interacting with different LLM providers."""
 
@@ -82,17 +123,44 @@ class LLMClient:
         # Determine the model string to use
         model = self.model_name if self.model_name != "gemini" else GEMINI_MODEL
 
-        response = await self.gemini_client.aio.models.generate_content(
-            model=model,
-            contents=normalized,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type=response_mime_type,
-                max_output_tokens=max_output_tokens,
-                temperature=temperature,
-            ),
-        )
-        return response.text
+        # Retry with exponential backoff for rate-limit (429) errors
+        max_retries = 4
+        last_err = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    print(f"DEBUG: Retrying Gemini request (attempt {attempt+1})...")
+
+                response = await self.gemini_client.aio.models.generate_content(
+                    model=model,
+                    contents=normalized,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        response_mime_type=response_mime_type,
+                        max_output_tokens=max_output_tokens,
+                        temperature=temperature,
+                    ),
+                )
+                return response.text
+
+            except Exception as e:
+                err_str = str(e)
+                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "ResourceExhausted" in type(e).__name__
+                
+                if is_rate_limit and attempt < max_retries:
+                    wait = min(5 * (2 ** attempt), 60)  # 5s, 10s, 20s, 40s
+                    print(f"DEBUG: Gemini rate limited (429), waiting {wait}s before retry...")
+                    await asyncio.sleep(wait)
+                    last_err = e
+                else:
+                    if not is_rate_limit:
+                        # Non-rate-limit errors should not retry
+                        raise
+                    last_err = e
+
+        print(f"DEBUG: All {max_retries+1} Gemini attempts failed.")
+        raise last_err
 
     async def _generate_openai_compatible(
         self,

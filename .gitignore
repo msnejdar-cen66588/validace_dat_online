@@ -10,6 +10,9 @@ venv/
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+# Test data
+backend/test_data/
+
 # Node / Next.js
 node_modules/
 .next/

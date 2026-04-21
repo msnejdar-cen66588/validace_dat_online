@@ -624,6 +624,28 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                     const statusColor = missing.length === 0 ? '#10b981' : (guardAgent.result?.status === 'fail' ? '#ef4444' : '#f59e0b');
                     const statusIcon = missing.length === 0 ? '✓' : (guardAgent.result?.status === 'fail' ? '✗' : '⚠');
                     const statusText = missing.length === 0 ? 'Kompletní fotodokumentace' : 'Neúplná fotodokumentace';
+                    const classifications = guardDetails.classifications || [];
+                    const imageMetadata = guardDetails.image_metadata || {};
+
+                    // Format EXIF date from "2025:03:15 14:22:00" to readable format
+                    const formatExifDate = (dateStr: string | null) => {
+                        if (!dateStr) return null;
+                        try {
+                            const cleaned = dateStr.trim();
+                            // EXIF format: "YYYY:MM:DD HH:MM:SS"
+                            const parts = cleaned.split(' ');
+                            const dateParts = parts[0].split(':');
+                            const timeParts = parts[1]?.split(':') || [];
+                            return `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}${timeParts.length >= 2 ? ` ${timeParts[0]}:${timeParts[1]}` : ''}`;
+                        } catch {
+                            return dateStr;
+                        }
+                    };
+
+                    // Build mapy.cz panorama URL
+                    const buildMapyCzUrl = (lat: number, lon: number) => {
+                        return `https://mapy.cz/zakladni?x=${lon}&y=${lat}&z=18&source=coor&id=${lon}%2C${lat}`;
+                    };
 
                     return (
                         <div className={styles.comparisonCard}>
@@ -648,6 +670,138 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                         {missing.map((m: string, i: number) => (
                                             <span key={i} className={styles.featureTag + ' ' + styles.featureDiff}>{m}</span>
                                         ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ── EXIF Metadata Results ── */}
+                            {classifications.length > 0 && Object.keys(imageMetadata).length > 0 && (
+                                <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-color, #e8ecf1)', paddingTop: '16px' }}>
+                                    <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary, #475569)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <span>📋</span> EXIF metadata fotek
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        {classifications.map((cls: any, idx: number) => {
+                                            const photoId = cls.photo_id;
+                                            const meta = imageMetadata[photoId];
+                                            if (!meta) return null;
+
+                                            const hasGps = meta.gps_latitude != null && meta.gps_longitude != null;
+                                            const hasDate = !!meta.capture_date;
+                                            const formattedDate = formatExifDate(meta.capture_date);
+
+                                            return (
+                                                <div key={idx} style={{
+                                                    display: 'flex',
+                                                    gap: '12px',
+                                                    padding: '10px 12px',
+                                                    background: 'var(--bg-secondary, #f8fafc)',
+                                                    borderRadius: '10px',
+                                                    border: '1px solid var(--border-color, #e8ecf1)',
+                                                    alignItems: 'center',
+                                                    flexWrap: 'wrap',
+                                                }}>
+                                                    {/* Thumbnail */}
+                                                    <div style={{
+                                                        width: '52px',
+                                                        height: '52px',
+                                                        borderRadius: '8px',
+                                                        overflow: 'hidden',
+                                                        flexShrink: 0,
+                                                        border: '1px solid var(--border-color, #e8ecf1)',
+                                                    }}>
+                                                        <img
+                                                            src={`${API_BASE}/uploads/${result.session_id}/${photoId}.jpg`}
+                                                            alt={cls.description || photoId}
+                                                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                                        />
+                                                    </div>
+
+                                                    {/* Photo info */}
+                                                    <div style={{ flex: 1, minWidth: '160px' }}>
+                                                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary, #0f172a)', marginBottom: '2px' }}>
+                                                            {meta.original_filename || photoId}
+                                                        </div>
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                            {(cls.categories || []).map((cat: string, ci: number) => (
+                                                                <span key={ci} style={{
+                                                                    fontSize: '10px',
+                                                                    fontWeight: 600,
+                                                                    padding: '2px 6px',
+                                                                    borderRadius: '4px',
+                                                                    background: '#eef1ff',
+                                                                    color: '#1428A0',
+                                                                    textTransform: 'uppercase',
+                                                                }}>{cat.replace(/^(EXTERIER_|INTERIER_)/, '')}</span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* GPS */}
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '120px' }}>
+                                                        {hasGps ? (
+                                                            <a
+                                                                href={buildMapyCzUrl(meta.gps_latitude, meta.gps_longitude)}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                onClick={(e) => e.stopPropagation()}
+                                                                style={{
+                                                                    display: 'inline-flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '4px',
+                                                                    fontSize: '11px',
+                                                                    fontWeight: 600,
+                                                                    color: '#1428A0',
+                                                                    textDecoration: 'none',
+                                                                    background: '#eef1ff',
+                                                                    padding: '4px 10px',
+                                                                    borderRadius: '100px',
+                                                                    border: '1px solid #c7d0ff',
+                                                                    whiteSpace: 'nowrap',
+                                                                    transition: 'all 0.15s',
+                                                                }}
+                                                                title={`${meta.gps_latitude?.toFixed(6)}, ${meta.gps_longitude?.toFixed(6)}`}
+                                                            >
+                                                                📍 GPS
+                                                                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                    <path d="M5 1H1v10h10V7" /><path d="M7 1h4v4" /><path d="M5 7L11 1" />
+                                                                </svg>
+                                                            </a>
+                                                        ) : (
+                                                            <span style={{
+                                                                fontSize: '11px',
+                                                                color: '#94a3b8',
+                                                                fontStyle: 'italic',
+                                                            }}>
+                                                                📍 bez GPS
+                                                            </span>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Date */}
+                                                    <div style={{ minWidth: '100px', textAlign: 'right' }}>
+                                                        {hasDate ? (
+                                                            <span style={{
+                                                                fontSize: '11px',
+                                                                fontWeight: 500,
+                                                                color: 'var(--text-secondary, #475569)',
+                                                            }}>
+                                                                📅 {formattedDate}
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{
+                                                                fontSize: '11px',
+                                                                color: '#94a3b8',
+                                                                fontStyle: 'italic',
+                                                            }}>
+                                                                📅 bez data
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )}

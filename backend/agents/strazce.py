@@ -13,7 +13,7 @@ for RD (rodinný dům) property valuation:
 import json
 from datetime import datetime
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 GUARDIAN_SYSTEM_PROMPT = """Jsi expert na validaci fotografické dokumentace nemovitostí typu Rodinný dům (RD) pro účely bankovního ocenění.
@@ -165,7 +165,7 @@ class StrazceAgent(BaseAgent):
                 max_output_tokens=3000,
             )
 
-            ai_result = json.loads(response_text)
+            ai_result = robust_json_parse(response_text)
             self.log("AI klasifikace přijata.")
 
             classifications = ai_result.get("classifications", [])
@@ -277,6 +277,19 @@ class StrazceAgent(BaseAgent):
 
             self.log(f"Výsledek: {status.value}")
 
+            # Build image metadata map for frontend (GPS, date, device)
+            image_metadata = {}
+            for img in images:
+                img_id = img.get("id", "")
+                meta = img.get("metadata", {})
+                image_metadata[img_id] = {
+                    "original_filename": img.get("original_filename", ""),
+                    "gps_latitude": meta.get("gps_latitude"),
+                    "gps_longitude": meta.get("gps_longitude"),
+                    "capture_date": meta.get("capture_date"),
+                    "device_model": meta.get("device_model"),
+                }
+
             return AgentResult(
                 status=status,
                 summary=summary_text,
@@ -291,6 +304,7 @@ class StrazceAgent(BaseAgent):
                     "has_vedlejsi_stavba_photo": has_vedlejsi_photo,
                     "interior_rooms_found": rooms_found,
                     "categories_found": categories,
+                    "image_metadata": image_metadata,
                 },
                 warnings=warnings,
                 errors=errors,

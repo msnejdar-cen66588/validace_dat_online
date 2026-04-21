@@ -7,7 +7,7 @@ Visual analysis of technical condition:
 """
 import json
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import GEMINI_API_KEY, GEMINI_MODEL
 
 
@@ -99,7 +99,7 @@ class InspektorAgent(BaseAgent):
                 max_output_tokens=1000,
             )
 
-            ai_result = json.loads(response_text)
+            ai_result = robust_json_parse(response_text)
             self.log("Inspection analysis received.", "info")
 
             verdikt = ai_result.get("verdikt", "NE")

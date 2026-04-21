@@ -8,7 +8,7 @@ Detects AI edits, retouching, and metadata inconsistencies:
 import json
 import asyncio
 from agents.base import BaseAgent, AgentResult, AgentStatus
-from agents.llm_utils import LLMClient
+from agents.llm_utils import LLMClient, robust_json_parse
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     MANIPULATION_SCORE_THRESHOLD, CONFIDENCE_THRESHOLD,
@@ -186,7 +186,7 @@ class ForenzniAnalytikAgent(BaseAgent):
                 max_output_tokens=3000,
             )
 
-            ai_result = json.loads(response_text)
+            ai_result = robust_json_parse(response_text)
             self.log("ForenzniAnalytik analysis received.", "info")
 
             # Parse results
