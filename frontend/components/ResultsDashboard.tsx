@@ -1272,7 +1272,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                     const checks: any[] = docDetails.checks || [];
                     const recommendations = docDetails.recommendations || [];
                     const overallSummary: string = docDetails.overall_summary || '';
-                    const propData: Record<string, any> = docDetails.property_data || {};
+                    const propData: Record<string, any> = result.property_data || docDetails.property_data || {};
 
                     const verdictColor = verdict === 'SHODA'
                         ? '#10b981'
