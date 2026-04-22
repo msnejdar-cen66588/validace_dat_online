@@ -278,9 +278,13 @@ async def _fetch_apify_samples(
 
     def _run_actor():
         """Synchronní volání Apify actoru – poběží v threadu."""
-        from apify_client import ApifyClient
-        client = ApifyClient(token=apify_token)
         try:
+            from apify_client import ApifyClient
+        except ImportError:
+            print("apify-client package not installed – pip install apify-client")
+            return []
+        try:
+            client = ApifyClient(token=apify_token)
             run = client.actor("LozSX930wmiwBDeEl").call(run_input=input_config)
             dataset_id = run.get("defaultDatasetId")
             if not dataset_id:
@@ -480,11 +484,19 @@ class OdhadceAgent(BaseAgent):
         else:
             self.log("Nepodařilo se identifikovat okres z adresy.", "warn")
 
-        # ── Načti reálné vzorky ze sreality (multi-district, řazené dle GPS) ──
+        # ── Načti reálné vzorky přes Apify (celá ČR, řazené dle GPS) ──────────
         lat, lon = coords if coords else (None, None)
-        raw_samples = await self._fetch_nearby_samples(
-            lat, lon, floor_area_int, district_id, total_count=20
-        )
+        try:
+            raw_samples = await self._fetch_nearby_samples(
+                lat, lon, floor_area_int, district_id, total_count=20
+            )
+        except Exception as e:
+            self.log(f"Chyba při stahování vzorků: {e}", "error")
+            return AgentResult(
+                status=AgentStatus.FAIL,
+                summary=f"Nepodařilo se stáhnout vzorky z realitních portálů: {e}",
+                errors=[str(e)]
+            )
 
         # Basic Sreality typo prevention (e.g., house area = 1 m2)
         valid_samples = []
