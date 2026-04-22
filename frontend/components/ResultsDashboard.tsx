@@ -1468,7 +1468,7 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                         const isLast = i === comparisonRows.length - 1;
 
                                         return (
-                                            <div key={i}>
+                                            <div key={i} className={row.note ? styles.compRowWrap : undefined}>
                                                 <div style={{
                                                     display: 'grid', gridTemplateColumns: '180px 1fr 1fr 60px',
                                                     padding: '12px 18px',
@@ -1478,13 +1478,19 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                     borderBottom: `1px solid ${borderColor}`,
                                                     borderRadius: isLast && !row.note ? '0 0 14px 14px' : undefined,
                                                     alignItems: 'center',
+                                                    cursor: row.note ? 'default' : undefined,
+                                                    transition: 'background 0.2s ease',
                                                 }}>
                                                     {/* Parameter name */}
                                                     <div style={{
                                                         fontWeight: 700, fontSize: '13px', color: '#0f172a',
                                                         textTransform: 'capitalize',
+                                                        display: 'flex', alignItems: 'center', gap: '6px',
                                                     }}>
                                                         {row.label}
+                                                        {row.note && (
+                                                            <span className={styles.compRowChevron}>▾</span>
+                                                        )}
                                                     </div>
 
                                                     {/* Form value */}
@@ -1516,19 +1522,17 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                     </div>
                                                 </div>
 
-                                                {/* Note row */}
+                                                {/* Note row — hidden, revealed on hover */}
                                                 {row.note && (
-                                                    <div style={{
-                                                        padding: '8px 18px 10px 198px',
-                                                        fontSize: '12px', color: '#64748b',
-                                                        lineHeight: 1.55,
-                                                        background: '#fafbfc',
+                                                    <div className={styles.compRowNote} style={{
                                                         borderLeft: '1px solid #e8ecf1',
                                                         borderRight: '1px solid #e8ecf1',
                                                         borderBottom: `1px solid ${borderColor}`,
                                                         borderRadius: isLast ? '0 0 14px 14px' : undefined,
                                                     }}>
-                                                        💬 {row.note}
+                                                        <div className={styles.compRowNoteInner}>
+                                                            💬 {row.note}
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
