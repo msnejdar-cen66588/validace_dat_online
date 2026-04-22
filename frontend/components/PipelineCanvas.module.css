@@ -234,25 +234,30 @@
 .agentSteps {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
 }
 
 .agentStep {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
+  flex-direction: column;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 12px;
+  transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
   opacity: 0.4;
   cursor: pointer;
   position: relative;
   overflow: hidden;
   animation: stepSlideIn 0.4s ease both;
+}
+
+.stepHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
 }
 
 .agentStep:hover {
@@ -273,43 +278,38 @@
 .step_processing {
   opacity: 1 !important;
   border-color: var(--accent-blue);
-  background: var(--accent-blue-light);
-  box-shadow: 0 2px 16px rgba(40, 112, 237, 0.14);
-  transform: translateY(-1px);
-  animation: stepSlideIn 0.4s ease both, pulseBorder 2.5s ease-in-out infinite;
-}
-
-@keyframes pulseBorder {
-  0%, 100% { box-shadow: 0 2px 16px rgba(40, 112, 237, 0.14); }
-  50% { box-shadow: 0 4px 24px rgba(40, 112, 237, 0.22); }
+  background: #f8fafc;
+  box-shadow: 0 4px 16px rgba(40, 112, 237, 0.08);
+  transform: translateY(-2px);
+  animation: stepSlideIn 0.4s ease both;
 }
 
 .step_success {
-  opacity: 0.75 !important;
+  opacity: 0.8 !important;
   border-color: rgba(5, 150, 105, 0.25);
-  background: var(--accent-green-light);
+  background: #f0fdf4;
 }
 
 .step_fail {
-  opacity: 0.85 !important;
+  opacity: 0.9 !important;
   border-color: rgba(220, 38, 38, 0.3);
-  background: var(--accent-red-light);
+  background: #fef2f2;
 }
 
 .step_warn {
-  opacity: 0.85 !important;
+  opacity: 0.9 !important;
   border-color: rgba(217, 119, 6, 0.3);
-  background: var(--accent-orange-light);
+  background: #fffbeb;
 }
 
 /* ── Step Icon ── */
 .stepIconWrap {
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 8px;
   font-size: 18px;
   flex-shrink: 0;
   background: var(--bg-secondary);
@@ -318,7 +318,7 @@
 
 .step_processing .stepIconWrap {
   background: rgba(40, 112, 237, 0.12);
-  animation: iconBounce 1.5s ease-in-out infinite;
+  transform: scale(1.1);
 }
 
 .step_success .stepIconWrap {
@@ -331,11 +331,6 @@
 
 .step_warn .stepIconWrap {
   background: rgba(217, 119, 6, 0.12);
-}
-
-@keyframes iconBounce {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
 }
 
 /* ── Step Text ── */
@@ -364,6 +359,24 @@
 
 .step_processing .stepDesc {
   color: var(--accent-blue);
+}
+
+/* Accordion detail */
+.stepDetail {
+  max-height: 0;
+  opacity: 0;
+  padding: 0 18px 0 68px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+  text-align: left;
+}
+
+.step_processing .stepDetail {
+  max-height: 150px;
+  opacity: 1;
+  padding-bottom: 16px;
 }
 
 /* ── Step Right Side (status indicator) ── */
@@ -401,12 +414,7 @@
   letter-spacing: 0.5px;
 }
 
-.badge_idle {
-  color: var(--text-muted);
-  background: var(--bg-secondary);
-}
-
-.badge_queued {
+.badge_idle, .badge_queued {
   color: var(--text-muted);
   background: var(--bg-secondary);
 }

@@ -7,6 +7,8 @@
   justify-content: center;
   background: var(--bg-secondary);
   animation: fadeIn 0.4s ease;
+  overflow-y: auto;
+  padding: 40px 0;
 }
 
 @keyframes fadeIn {
@@ -18,41 +20,37 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 36px;
-  max-width: 520px;
-  padding: 48px 32px;
-  text-align: center;
+  gap: 24px;
+  width: 100%;
+  max-width: 560px;
+  padding: 32px;
+  background: var(--surface-card, #ffffff);
+  border-radius: 20px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.05);
+  border: 1px solid var(--border-subtle, #e2e8f0);
 }
 
-/* ── Animated Ring ── */
+/* ── Animated Ring Header ── */
+.ringHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  border-bottom: 1px solid var(--border-color, #e8ecf1);
+  padding-bottom: 20px;
+  margin-bottom: 8px;
+}
+
 .ringContainer {
   position: relative;
-  width: 160px;
-  height: 160px;
-}
-
-.ringOuter {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 3px solid var(--accent-blue-light);
-  animation: pulseGlow 2.5s ease-in-out infinite;
-}
-
-@keyframes pulseGlow {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(40, 112, 237, 0.08);
-    transform: scale(1);
-  }
-  50% {
-    box-shadow: 0 0 40px 8px rgba(40, 112, 237, 0.15);
-    transform: scale(1.03);
-  }
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
 }
 
 .ringSvg {
-  width: 160px;
-  height: 160px;
+  width: 56px;
+  height: 56px;
   animation: spinRing 2s linear infinite;
 }
 
@@ -63,104 +61,96 @@
 
 .ringTrack {
   fill: none;
-  stroke: var(--accent-blue-light);
-  stroke-width: 4;
+  stroke: var(--accent-blue-light, #e0e7ff);
+  stroke-width: 6;
 }
 
 .ringArc {
   fill: none;
   stroke: url(#loaderGradient);
-  stroke-width: 4;
+  stroke-width: 6;
   stroke-linecap: round;
-  stroke-dasharray: 200 300;
+  stroke-dasharray: 60 120;
 }
 
-.ringIcon {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 72px;
-  height: 72px;
+.titleWrapper {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-blue-light);
-  border-radius: 50%;
-  color: var(--accent-blue);
-  animation: iconPulse 2s ease-in-out infinite;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
 }
 
-@keyframes iconPulse {
-  0%, 100% { transform: translate(-50%, -50%) scale(1); }
-  50% { transform: translate(-50%, -50%) scale(1.06); }
-}
-
-/* ── Text ── */
 .title {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: -0.3px;
+  margin: 0;
 }
 
 .subtitle {
-  font-size: 15px;
+  font-size: 13px;
   color: var(--text-muted);
-  margin-top: -20px;
+  margin: 0;
 }
 
-/* ── Steps ── */
+/* ── Agents List ── */
 .steps {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  max-width: 380px;
 }
 
 .stepItem {
   display: flex;
+  flex-direction: column;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+  overflow: hidden;
+  opacity: 0.5;
+  transform: translateY(0);
+}
+
+.stepHeader {
+  display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 18px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  opacity: 0.45;
-  transform: translateY(0);
+  padding: 12px 16px;
+  cursor: default;
 }
 
 .stepItemActive {
   opacity: 1;
-  border-color: var(--accent-blue);
-  background: var(--accent-blue-light);
-  box-shadow: 0 2px 12px rgba(40, 112, 237, 0.12);
-  transform: translateY(-1px);
+  border-color: var(--accent-blue, #2870ed);
+  background: #f8fafc;
+  box-shadow: 0 4px 16px rgba(40, 112, 237, 0.08);
+  transform: translateY(-2px);
 }
 
 .stepItemDone {
-  opacity: 0.7;
+  opacity: 0.8;
   border-color: rgba(5, 150, 105, 0.2);
-  background: var(--accent-green-light);
+  background: #f0fdf4;
 }
 
 .stepIcon {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  font-size: 18px;
+  border-radius: 8px;
+  font-size: 16px;
   flex-shrink: 0;
-  background: var(--bg-secondary);
+  background: #f1f5f9;
   transition: all 0.3s ease;
 }
 
 .stepItemActive .stepIcon {
   background: rgba(40, 112, 237, 0.12);
+  transform: scale(1.1);
 }
 
 .stepItemDone .stepIcon {
@@ -172,6 +162,7 @@
   flex-direction: column;
   gap: 2px;
   text-align: left;
+  flex: 1;
 }
 
 .stepLabel {
@@ -185,8 +176,24 @@
   color: var(--text-muted);
 }
 
+/* Accordion detail */
+.stepDetail {
+  max-height: 0;
+  opacity: 0;
+  padding: 0 16px 0 62px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.stepItemActive .stepDetail {
+  max-height: 150px;
+  opacity: 1;
+  padding-bottom: 16px;
+}
+
 .stepSpinner {
-  margin-left: auto;
   width: 18px;
   height: 18px;
   border: 2px solid rgba(40, 112, 237, 0.2);
@@ -202,7 +209,6 @@
 }
 
 .stepCheck {
-  margin-left: auto;
   width: 20px;
   height: 20px;
   color: var(--accent-green);
@@ -214,25 +220,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 20px;
-  background: var(--bg-primary);
+  padding: 10px 16px;
+  background: #f8fafc;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-pill);
-  font-size: 13px;
+  border-radius: 20px;
+  font-size: 12px;
   color: var(--text-muted);
-  animation: fadeInUp 0.6s ease 0.8s both;
-}
-
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  margin-top: 8px;
 }
 
 .tipIcon {
-  font-size: 16px;
+  font-size: 14px;
 }
 
-/* ── Dots animation ── */
 .dots span {
   animation: dotBlink 1.4s infinite;
   opacity: 0;
@@ -247,23 +247,14 @@
   40% { opacity: 1; }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 600px) {
+  .overlay {
+    padding: 20px 16px;
+  }
   .content {
-    padding: 32px 16px;
+    padding: 24px 20px;
   }
-  .ringContainer {
-    width: 120px;
-    height: 120px;
-  }
-  .ringSvg {
-    width: 120px;
-    height: 120px;
-  }
-  .ringIcon {
-    width: 56px;
-    height: 56px;
-  }
-  .title {
-    font-size: 20px;
+  .stepDetail {
+    padding-left: 16px;
   }
 }

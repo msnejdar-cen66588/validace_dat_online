@@ -20,6 +20,7 @@ const AGENTS_CONFIG = [
         name: 'Strazce',
         label: 'Strážce',
         description: 'Kontrola úplnosti fotodokumentace (BR-G4)',
+        long_description: 'Rozpoznává místnosti, hodnotí celkovou kvalitu a ostrost fotografií a hlídá, zda nechybí povinné záběry.',
         icon: '🛡️',
         color: '#1e6fd9',
     },
@@ -27,6 +28,7 @@ const AGENTS_CONFIG = [
         name: 'ForenzniAnalytik',
         label: 'Forenzní analytik',
         description: 'Detekce manipulace a úprav fotografií',
+        long_description: 'Detekuje potenciální podvody. Analyzuje EXIF metadata a hledá stopy po úpravách ve Photoshopu nebo AI generovaných fotkách.',
         icon: '🔬',
         color: '#6366f1',
     },
@@ -34,6 +36,7 @@ const AGENTS_CONFIG = [
         name: 'Historik',
         label: 'Historik',
         description: 'Určení věku a kategorizace nemovitosti',
+        long_description: 'Odhaduje skutečný věk stavby na základě vizuálních znaků (typ oken, fasáda, materiály) a porovnává s rokem dokončení.',
         icon: '📜',
         color: '#0891b2',
     },
@@ -41,6 +44,7 @@ const AGENTS_CONFIG = [
         name: 'Inspektor',
         label: 'Inspektor',
         description: 'Hodnocení technického stavu objektu',
+        long_description: 'Prohledává fotky a detekuje technické závady: praskliny, vlhkost, plísně a nedokončené stavební úpravy.',
         icon: '🔍',
         color: '#d97706',
     },
@@ -48,6 +52,7 @@ const AGENTS_CONFIG = [
         name: 'GeoValidator',
         label: 'GeoValidator',
         description: 'Ověření GPS lokace (Mapy.cz panorama)',
+        long_description: 'Kontroluje přístupové cesty a rizika v okolí na základě ortofotomap a ověřuje lokaci focení.',
         icon: '📍',
         color: '#db2777',
     },
@@ -55,6 +60,7 @@ const AGENTS_CONFIG = [
         name: 'PorovnavacDokumentu',
         label: 'DocComparator',
         description: 'Porovnání dat z formuláře vs fotky',
+        long_description: 'Křížově ověřuje zjištěná data. Přepočítává podlaží a odhaduje podlahovou plochu zvenku vs zevnitř k zamezení zkreslení.',
         icon: '📄',
         color: '#ea580c',
     },
@@ -62,6 +68,7 @@ const AGENTS_CONFIG = [
         name: 'KatastralniAnalytik',
         label: 'Katastrální analýza',
         description: 'Analýza LV – rizika, ortofoto, stavby',
+        long_description: 'Stahuje a analyzuje data z Katastru nemovitostí a Listu vlastnictví. Hledá břemena a právní vady.',
         icon: '🏛️',
         color: '#7c3aed',
     },
@@ -69,6 +76,7 @@ const AGENTS_CONFIG = [
         name: 'Strateg',
         label: 'Stratég',
         description: 'Agregace výsledků a finální verdikt',
+        long_description: 'Syntetizuje veškerá zjištění od předchozích agentů a vydává závěrečné rozhodnutí a doporučení pro odhadce.',
         icon: '🎯',
         color: '#059669',
     },
@@ -339,58 +347,65 @@ export default function PipelineCanvas({
                                         '--agent-color': agent.color,
                                     } as React.CSSProperties}
                                 >
-                                    {/* Icon */}
-                                    <div
-                                        className={styles.stepIconWrap}
-                                        style={{
-                                            background: isProcessing
-                                                ? `${agent.color}25`
-                                                : isDone
-                                                    ? `${agent.color}15`
-                                                    : undefined,
-                                            color: isProcessing || isDone ? agent.color : undefined,
-                                        }}
-                                    >
-                                        {agent.icon}
-                                    </div>
+                                    <div className={styles.stepHeader}>
+                                        {/* Icon */}
+                                        <div
+                                            className={styles.stepIconWrap}
+                                            style={{
+                                                background: isProcessing
+                                                    ? `${agent.color}25`
+                                                    : isDone
+                                                        ? `${agent.color}15`
+                                                        : undefined,
+                                                color: isProcessing || isDone ? agent.color : undefined,
+                                            }}
+                                        >
+                                            {agent.icon}
+                                        </div>
 
-                                    {/* Text */}
-                                    <div className={styles.stepText}>
-                                        <span className={styles.stepLabel}>{agent.label}</span>
-                                        <span className={styles.stepDesc}>
-                                            {isProcessing && lastLog
-                                                ? lastLog.message?.substring(0, 60)
-                                                : isProcessing
-                                                    ? 'Analyzuji...'
-                                                    : agent.description}
-                                        </span>
-                                    </div>
+                                        {/* Text */}
+                                        <div className={styles.stepText}>
+                                            <span className={styles.stepLabel}>{agent.label}</span>
+                                            <span className={styles.stepDesc}>
+                                                {isProcessing && lastLog
+                                                    ? lastLog.message?.substring(0, 60)
+                                                    : isProcessing
+                                                        ? 'Analyzuji...'
+                                                        : agent.description}
+                                            </span>
+                                        </div>
 
-                                    {/* Status indicator */}
-                                    {isProcessing && <div className={styles.stepSpinner} />}
-                                    {status === 'success' && (
-                                        <svg className={styles.stepCheck} viewBox="0 0 22 22" fill="none">
-                                            <circle cx="11" cy="11" r="10" fill="rgba(5,150,105,0.15)" />
-                                            <path d="M7 11.5L9.5 14L15 8" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                        </svg>
-                                    )}
-                                    {status === 'fail' && (
-                                        <svg className={styles.stepCheck} viewBox="0 0 22 22" fill="none">
-                                            <circle cx="11" cy="11" r="10" fill="rgba(220,38,38,0.15)" />
-                                            <path d="M8 8L14 14M14 8L8 14" stroke="var(--accent-red)" strokeWidth="2" strokeLinecap="round" />
-                                        </svg>
-                                    )}
-                                    {status === 'warn' && (
-                                        <svg className={styles.stepCheck} viewBox="0 0 22 22" fill="none">
-                                            <circle cx="11" cy="11" r="10" fill="rgba(217,119,6,0.15)" />
-                                            <path d="M11 7V12M11 14.5V15" stroke="var(--accent-orange)" strokeWidth="2" strokeLinecap="round" />
-                                        </svg>
-                                    )}
-                                    {!isProcessing && !isDone && (
-                                        <span className={`${styles.stepStatusBadge} ${styles[`badge_${status}`]}`}>
-                                            {STATUS_LABELS[status] || status}
-                                        </span>
-                                    )}
+                                        {/* Status indicator */}
+                                        {isProcessing && <div className={styles.stepSpinner} />}
+                                        {status === 'success' && (
+                                            <svg className={styles.stepCheck} viewBox="0 0 22 22" fill="none">
+                                                <circle cx="11" cy="11" r="10" fill="rgba(5,150,105,0.15)" />
+                                                <path d="M7 11.5L9.5 14L15 8" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                        )}
+                                        {status === 'fail' && (
+                                            <svg className={styles.stepCheck} viewBox="0 0 22 22" fill="none">
+                                                <circle cx="11" cy="11" r="10" fill="rgba(220,38,38,0.15)" />
+                                                <path d="M8 8L14 14M14 8L8 14" stroke="var(--accent-red)" strokeWidth="2" strokeLinecap="round" />
+                                            </svg>
+                                        )}
+                                        {status === 'warn' && (
+                                            <svg className={styles.stepCheck} viewBox="0 0 22 22" fill="none">
+                                                <circle cx="11" cy="11" r="10" fill="rgba(217,119,6,0.15)" />
+                                                <path d="M11 7V12M11 14.5V15" stroke="var(--accent-orange)" strokeWidth="2" strokeLinecap="round" />
+                                            </svg>
+                                        )}
+                                        {!isProcessing && !isDone && (
+                                            <span className={`${styles.stepStatusBadge} ${styles[`badge_${status}`]}`}>
+                                                {STATUS_LABELS[status] || status}
+                                            </span>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Accordion detail */}
+                                    <div className={styles.stepDetail}>
+                                        {agent.long_description}
+                                    </div>
 
                                     {/* Processing bar */}
                                     {isProcessing && (
