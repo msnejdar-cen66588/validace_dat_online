@@ -16,10 +16,18 @@ Dostaneš:
 
 Následuj tyto přesné postupy:
 
+DŮLEŽITÉ: Každá fotografie je označena klasifikací (Typ: EXTERIER_PREDNI, INTERIER_KUCHYN atd.) a popisem. Využij tyto popisky k rozlišení exteriéru od interiéru.
+
 ═══════════════════════════════════════════════════════════════
 1. **POČET PODLAŽÍ A PODKROVÍ (Křížová kontrola exteriér vs. interiér)**
 ═══════════════════════════════════════════════════════════════
 Musíš perfektně určit, kolik má dům reálných obytných podlaží.
+
+POVINNÝ POSTUP – VŽDY ZAČNI EXTERIÉREM:
+  KROK 1: Najdi fotky označené jako EXTERIER_* (přední, zadní, boční pohled).
+  KROK 2: Na exteriérových fotkách spočítej řady oken nad sebou. Každá řada standardních oken = 1 obytné podlaží. DVĚ řady oken = 2 obytná podlaží (1NP + 2NP).
+  KROK 3: Teprve poté zkontroluj interiér pro potvrzení.
+  NIKDY nepiš "Exteriér není k dispozici" pokud existují fotky označené EXTERIER_*!
 
 DETEKCE OBYTNÉHO PODKROVÍ – PŘÍSNÝ 3-BODOVÝ TEST:
 Obytné podkroví smíš potvrdit POUZE pokud jsou splněny VŠECHNY TŘI podmínky současně:
@@ -184,21 +192,71 @@ class PorovnavacDokumentuAgent(BaseAgent):
 
         try:
             from google.genai import types
+
+            # ── Build photo classification map from Strazce results ──
+            classification_map: dict[str, list[str]] = {}  # photo_id -> [categories]
+            description_map: dict[str, str] = {}  # photo_id -> description
+            agent_results = context.get("agent_results", {})
+            strazce_result = agent_results.get("Strazce")
+            if strazce_result and hasattr(strazce_result, 'details') and strazce_result.details:
+                classifications = strazce_result.details.get("classifications", [])
+                for clf in classifications:
+                    photo_id = clf.get("photo_id", "")
+                    categories = clf.get("categories", [])
+                    description = clf.get("description", "")
+                    classification_map[photo_id] = categories
+                    description_map[photo_id] = description
+
+            # ── Prioritize photos: exterior first, then interior ──
+            exterior_images = []
+            interior_images = []
+            other_images = []
+
+            for img in images:
+                img_id = img.get("id", "")
+                cats = classification_map.get(img_id, [])
+                cats_text = " ".join(cats).upper()
+                if "EXTERIER" in cats_text:
+                    exterior_images.append(img)
+                elif "INTERIER" in cats_text:
+                    interior_images.append(img)
+                else:
+                    other_images.append(img)
+
+            # Ensure exterior photos are always included (max 10 total)
+            prioritized = exterior_images + interior_images + other_images
+            photos_to_send = prioritized[:10]
+
+            ext_count = sum(1 for img in photos_to_send
+                           if "EXTERIER" in " ".join(classification_map.get(img.get("id", ""), [])).upper())
+            int_count = sum(1 for img in photos_to_send
+                           if "INTERIER" in " ".join(classification_map.get(img.get("id", ""), [])).upper())
+            self.log(f"Odesílám {len(photos_to_send)} fotek (ext={ext_count}, int={int_count})")
+
             # Build prompt with property data
             property_json = json.dumps(property_data, ensure_ascii=False, indent=2)
             parts = [
                 f"Údaje z formuláře ocenění rodinného domu:\n```json\n{property_json}\n```\n\n"
-                f"Porovnej tyto údaje s následujícími {len(images)} fotografiemi nemovitosti:\n"
+                f"Porovnej tyto údaje s následujícími {len(photos_to_send)} fotografiemi nemovitosti:\n"
             ]
 
-            # Attach photos (max 10 to stay within limits)
-            photos_to_send = images[:10]
+            # Attach photos WITH classification labels
             for img in photos_to_send:
                 try:
                     with open(img["processed_path"], "rb") as f:
                         image_bytes = f.read()
                     parts.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
-                    parts.append(f"Photo ID: {img['id']}")
+
+                    # Add classification label so AI knows what it's looking at
+                    img_id = img.get("id", "?")
+                    cats = classification_map.get(img_id, [])
+                    desc = description_map.get(img_id, "")
+                    label_parts = [f"Photo ID: {img_id}"]
+                    if cats:
+                        label_parts.append(f"Typ: {', '.join(cats)}")
+                    if desc:
+                        label_parts.append(f"Popis: {desc}")
+                    parts.append(" | ".join(label_parts))
                 except Exception as e:
                     self.log(f"Error reading image {img.get('id', '?')}: {e}", "warn")
 
