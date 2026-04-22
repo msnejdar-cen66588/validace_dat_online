@@ -1269,10 +1269,10 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
 
                     const verdict = docDetails.verdict || 'UNKNOWN';
                     const confidence = docDetails.confidence || 0;
-                    const checks = docDetails.checks || [];
+                    const checks: any[] = docDetails.checks || [];
                     const recommendations = docDetails.recommendations || [];
-                    const overallSummary = docDetails.overall_summary || '';
-                    const propData = docDetails.property_data || {};
+                    const overallSummary: string = docDetails.overall_summary || '';
+                    const propData: Record<string, any> = docDetails.property_data || {};
 
                     const verdictColor = verdict === 'SHODA'
                         ? '#10b981'
@@ -1286,49 +1286,95 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                             ? '✗ Neshoda'
                             : '⚠ Částečná shoda';
 
-                    // Map Czech property_data keys to human labels
-                    const PROP_LABELS: Record<string, string> = {
-                        stavba_dokoncena: 'Rok dokončení',
-                        stav_rodinneho_domu: 'Stav domu',
-                        pocet_podlazi: 'Počet podlaží',
-                        typ_strechy: 'Typ střechy',
-                        podsklepeni: 'Podsklepení',
-                        celkova_podlahova_plocha: 'Celk. podlahová plocha',
-                        plocha_pozemku: 'Plocha pozemku',
-                        typ_vytapeni: 'Vytápění',
-                        adresa: 'Adresa',
-                        podkrovi: 'Podkroví',
-                        podkrovi_obytne: 'Obytné podkroví',
-                        vyuziti_podkrovi_procent: 'Využití podkroví',
-                        // English fallback keys (legacy)
-                        year_built: 'Rok dokončení',
-                        floor_count: 'Počet podlaží',
-                        total_floor_area: 'Celk. podlahová plocha',
-                        roof_type: 'Typ střechy',
-                        condition: 'Stav domu',
-                        basement: 'Podsklepení',
-                        heating: 'Vytápění',
-                        property_address: 'Adresa',
-                    };
+                    // ── Map property_data keys → human labels + check-field aliases ──
+                    const FIELD_CONFIG: { key: string; label: string; aliases: string[] }[] = [
+                        { key: 'stav_rodinneho_domu', label: 'Stav domu', aliases: ['stav domu', 'stav', 'condition'] },
+                        { key: 'pocet_podlazi', label: 'Počet podlaží', aliases: ['počet podlaží', 'podlaží', 'floor_count', 'floors'] },
+                        { key: 'celkova_podlahova_plocha', label: 'Celk. podlahová plocha', aliases: ['celková podlahová plocha', 'podlahová plocha', 'plocha', 'total_floor_area'] },
+                        { key: 'typ_strechy', label: 'Typ střechy', aliases: ['typ střechy', 'střecha', 'roof_type'] },
+                        { key: 'podsklepeni', label: 'Podsklepení', aliases: ['podsklepení', 'sklep', 'basement'] },
+                        { key: 'typ_vytapeni', label: 'Vytápění', aliases: ['typ vytápění', 'vytápění', 'heating'] },
+                        { key: 'stavba_dokoncena', label: 'Rok dokončení', aliases: ['rok dokončení', 'rok výstavby', 'year_built'] },
+                        { key: 'plocha_pozemku', label: 'Plocha pozemku', aliases: ['plocha pozemku', 'pozemek'] },
+                        { key: 'podkrovi', label: 'Podkroví', aliases: ['podkroví'] },
+                        { key: 'podkrovi_obytne', label: 'Obytné podkroví', aliases: ['obytné podkroví'] },
+                        { key: 'vyuziti_podkrovi_procent', label: 'Využití podkroví', aliases: ['využití podkroví'] },
+                        { key: 'adresa', label: 'Adresa', aliases: ['adresa', 'property_address'] },
+                        // Legacy English keys
+                        { key: 'year_built', label: 'Rok dokončení', aliases: [] },
+                        { key: 'floor_count', label: 'Počet podlaží', aliases: [] },
+                        { key: 'total_floor_area', label: 'Celk. podlahová plocha', aliases: [] },
+                        { key: 'roof_type', label: 'Typ střechy', aliases: [] },
+                        { key: 'condition', label: 'Stav domu', aliases: [] },
+                        { key: 'basement', label: 'Podsklepení', aliases: [] },
+                        { key: 'heating', label: 'Vytápění', aliases: [] },
+                        { key: 'property_address', label: 'Adresa', aliases: [] },
+                    ];
 
-                    // Build a map from check field name to check result for cross-referencing
-                    const checksByField: Record<string, any> = {};
+                    // Build index: check field name → check object (case-insensitive)
+                    const checksByAlias: Record<string, any> = {};
                     checks.forEach((c: any) => {
-                        const key = (c.field || '').toLowerCase();
-                        checksByField[key] = c;
+                        const key = (c.field || '').toLowerCase().trim();
+                        checksByAlias[key] = c;
                     });
 
-                    // Get property data entries that have a value
-                    const propEntries = Object.entries(propData)
-                        .filter(([_, v]) => v != null && v !== '')
-                        .map(([k, v]) => ({
-                            key: k,
-                            label: PROP_LABELS[k] || k,
-                            value: String(v),
-                        }));
+                    // Find check that matches a field config by aliases
+                    const findCheck = (cfg: typeof FIELD_CONFIG[0]): any | null => {
+                        for (const alias of [cfg.label.toLowerCase(), ...cfg.aliases]) {
+                            if (checksByAlias[alias]) return checksByAlias[alias];
+                        }
+                        return null;
+                    };
 
-                    const matchCount = checks.filter((c: any) => c.match).length;
-                    const mismatchCount = checks.length - matchCount;
+                    // Build unified comparison rows: form value + AI observation
+                    type CompRow = {
+                        label: string;
+                        formValue: string;
+                        aiValue: string | null;
+                        match: boolean | null; // null = unknown
+                        note: string | null;
+                    };
+
+                    const seenKeys = new Set<string>();
+                    const comparisonRows: CompRow[] = [];
+
+                    // 1) Rows from property_data fields
+                    for (const cfg of FIELD_CONFIG) {
+                        // Try both the key and English fallback keys
+                        const val = propData[cfg.key];
+                        if (val == null || val === '' || seenKeys.has(cfg.label)) continue;
+                        seenKeys.add(cfg.label);
+
+                        const check = findCheck(cfg);
+                        comparisonRows.push({
+                            label: cfg.label,
+                            formValue: String(val),
+                            aiValue: check?.observed || null,
+                            match: check ? check.match : null,
+                            note: check?.note || null,
+                        });
+                    }
+
+                    // 2) Checks that didn't match any property_data field (extra AI observations)
+                    checks.forEach((c: any) => {
+                        const fieldName = c.field || '';
+                        const alreadyUsed = comparisonRows.some(
+                            r => r.label.toLowerCase() === fieldName.toLowerCase() || r.aiValue === c.observed
+                        );
+                        if (!alreadyUsed && fieldName) {
+                            comparisonRows.push({
+                                label: fieldName,
+                                formValue: c.declared || '–',
+                                aiValue: c.observed || null,
+                                match: c.match ?? null,
+                                note: c.note || null,
+                            });
+                        }
+                    });
+
+                    const matchCount = comparisonRows.filter(r => r.match === true).length;
+                    const mismatchCount = comparisonRows.filter(r => r.match === false).length;
+                    const unknownCount = comparisonRows.filter(r => r.match === null).length;
 
                     return (
                         <div className={styles.comparisonCard}>
@@ -1348,28 +1394,32 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                             </div>
 
                             {/* Match/Mismatch summary chips */}
-                            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
-                                <div style={{
-                                    display: 'flex', alignItems: 'center', gap: '6px',
-                                    padding: '6px 14px', borderRadius: '100px',
-                                    background: '#ecfdf5', color: '#059669',
-                                    fontSize: '13px', fontWeight: 600,
-                                    border: '1px solid #86efac',
-                                }}>
-                                    ✓ {matchCount} shod
+                            {(matchCount > 0 || mismatchCount > 0) && (
+                                <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                                    {matchCount > 0 && (
+                                        <div style={{
+                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                            padding: '6px 14px', borderRadius: '100px',
+                                            background: '#ecfdf5', color: '#059669',
+                                            fontSize: '13px', fontWeight: 600,
+                                            border: '1px solid #86efac',
+                                        }}>
+                                            ✓ {matchCount} shod
+                                        </div>
+                                    )}
+                                    {mismatchCount > 0 && (
+                                        <div style={{
+                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                            padding: '6px 14px', borderRadius: '100px',
+                                            background: '#fef2f2', color: '#dc2626',
+                                            fontSize: '13px', fontWeight: 600,
+                                            border: '1px solid #fecaca',
+                                        }}>
+                                            ✗ {mismatchCount} neshod
+                                        </div>
+                                    )}
                                 </div>
-                                {mismatchCount > 0 && (
-                                    <div style={{
-                                        display: 'flex', alignItems: 'center', gap: '6px',
-                                        padding: '6px 14px', borderRadius: '100px',
-                                        background: '#fef2f2', color: '#dc2626',
-                                        fontSize: '13px', fontWeight: 600,
-                                        border: '1px solid #fecaca',
-                                    }}>
-                                        ✗ {mismatchCount} neshod
-                                    </div>
-                                )}
-                            </div>
+                            )}
 
                             {overallSummary && (
                                 <div className={styles.comparisonText}>
@@ -1377,114 +1427,113 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                 </div>
                             )}
 
-                            {/* ── Side-by-side comparison cards ── */}
-                            {checks.length > 0 && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
-                                    {checks.map((c: any, i: number) => {
-                                        const isMatch = c.match;
-                                        const borderColor = isMatch ? '#86efac' : '#fecaca';
-                                        const bgColor = isMatch ? '#f0fdf4' : '#fef2f2';
-                                        const iconColor = isMatch ? '#059669' : '#dc2626';
+                            {/* ── Two-column comparison table: Form vs AI ── */}
+                            {comparisonRows.length > 0 && (
+                                <div style={{ marginBottom: '20px' }}>
+                                    {/* Table header */}
+                                    <div style={{
+                                        display: 'grid', gridTemplateColumns: '180px 1fr 1fr 60px',
+                                        padding: '10px 18px',
+                                        background: '#f8fafc',
+                                        borderRadius: '14px 14px 0 0',
+                                        border: '1px solid #e8ecf1',
+                                        borderBottom: '2px solid #e8ecf1',
+                                    }}>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: '#64748b' }}>
+                                            Parametr
+                                        </div>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: '#64748b' }}>
+                                            📋 Formulář klienta
+                                        </div>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: '#64748b' }}>
+                                            🤖 AI zjištění z fotek
+                                        </div>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: '#64748b', textAlign: 'center' }}>
+                                            Shoda
+                                        </div>
+                                    </div>
+
+                                    {/* Table rows */}
+                                    {comparisonRows.map((row, i) => {
+                                        const bgColor = row.match === true
+                                            ? '#f0fdf4'
+                                            : row.match === false
+                                                ? '#fef2f2'
+                                                : '#ffffff';
+                                        const borderColor = row.match === true
+                                            ? '#bbf7d0'
+                                            : row.match === false
+                                                ? '#fecaca'
+                                                : '#f1f5f9';
+                                        const isLast = i === comparisonRows.length - 1;
 
                                         return (
-                                            <div key={i} style={{
-                                                background: '#ffffff',
-                                                border: `1px solid ${borderColor}`,
-                                                borderRadius: '14px',
-                                                overflow: 'hidden',
-                                                boxShadow: '0 1px 6px rgba(0,0,0,0.03)',
-                                            }}>
-                                                {/* Header with field name and match status */}
+                                            <div key={i}>
                                                 <div style={{
-                                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                    display: 'grid', gridTemplateColumns: '180px 1fr 1fr 60px',
                                                     padding: '12px 18px',
                                                     background: bgColor,
+                                                    borderLeft: '1px solid #e8ecf1',
+                                                    borderRight: '1px solid #e8ecf1',
                                                     borderBottom: `1px solid ${borderColor}`,
+                                                    borderRadius: isLast && !row.note ? '0 0 14px 14px' : undefined,
+                                                    alignItems: 'center',
                                                 }}>
-                                                    <span style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a', textTransform: 'capitalize' }}>
-                                                        {c.field}
-                                                    </span>
-                                                    <span style={{
-                                                        display: 'inline-flex', alignItems: 'center', gap: '4px',
-                                                        fontSize: '12px', fontWeight: 700, color: iconColor,
-                                                        padding: '4px 12px', borderRadius: '100px',
-                                                        background: `${iconColor}15`,
-                                                    }}>
-                                                        {isMatch ? '✓ Shoda' : '✗ Neshoda'}
-                                                    </span>
-                                                </div>
-
-                                                {/* Two-column: Formulář vs AI */}
-                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '60px' }}>
-                                                    {/* Left: Client / Form data */}
+                                                    {/* Parameter name */}
                                                     <div style={{
-                                                        padding: '14px 18px',
-                                                        borderRight: '1px solid #f1f5f9',
+                                                        fontWeight: 700, fontSize: '13px', color: '#0f172a',
+                                                        textTransform: 'capitalize',
                                                     }}>
-                                                        <div style={{
-                                                            fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-                                                            letterSpacing: '0.8px', color: '#94a3b8', marginBottom: '6px',
-                                                        }}>
-                                                            📋 Formulář klienta
-                                                        </div>
-                                                        <div style={{
-                                                            fontSize: '14px', fontWeight: 600, color: '#0f172a',
-                                                            lineHeight: 1.5,
-                                                        }}>
-                                                            {c.declared || '–'}
-                                                        </div>
+                                                        {row.label}
                                                     </div>
 
-                                                    {/* Right: AI findings */}
+                                                    {/* Form value */}
+                                                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                                                        {row.formValue}
+                                                    </div>
+
+                                                    {/* AI observation */}
                                                     <div style={{
-                                                        padding: '14px 18px',
+                                                        fontSize: '13px', fontWeight: 600,
+                                                        color: row.match === false ? '#dc2626'
+                                                            : row.aiValue ? '#0f172a' : '#94a3b8',
+                                                        fontStyle: row.aiValue ? 'normal' : 'italic',
                                                     }}>
-                                                        <div style={{
-                                                            fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-                                                            letterSpacing: '0.8px', color: '#94a3b8', marginBottom: '6px',
-                                                        }}>
-                                                            🤖 AI zjištění z fotek
-                                                        </div>
-                                                        <div style={{
-                                                            fontSize: '14px', fontWeight: 600,
-                                                            color: isMatch ? '#0f172a' : '#dc2626',
-                                                            lineHeight: 1.5,
-                                                        }}>
-                                                            {c.observed || '–'}
-                                                        </div>
+                                                        {row.aiValue || 'Viz celkové shrnutí'}
+                                                    </div>
+
+                                                    {/* Match indicator */}
+                                                    <div style={{ textAlign: 'center', fontSize: '16px', fontWeight: 700 }}>
+                                                        {row.match === true && (
+                                                            <span style={{ color: '#059669' }}>✓</span>
+                                                        )}
+                                                        {row.match === false && (
+                                                            <span style={{ color: '#dc2626' }}>✗</span>
+                                                        )}
+                                                        {row.match === null && (
+                                                            <span style={{ color: '#cbd5e1' }}>–</span>
+                                                        )}
                                                     </div>
                                                 </div>
 
-                                                {/* Note (expandable detail) */}
-                                                {c.note && (
+                                                {/* Note row */}
+                                                {row.note && (
                                                     <div style={{
-                                                        padding: '10px 18px 14px',
-                                                        borderTop: '1px solid #f1f5f9',
+                                                        padding: '8px 18px 10px 198px',
                                                         fontSize: '12px', color: '#64748b',
-                                                        lineHeight: 1.6,
+                                                        lineHeight: 1.55,
                                                         background: '#fafbfc',
+                                                        borderLeft: '1px solid #e8ecf1',
+                                                        borderRight: '1px solid #e8ecf1',
+                                                        borderBottom: `1px solid ${borderColor}`,
+                                                        borderRadius: isLast ? '0 0 14px 14px' : undefined,
                                                     }}>
-                                                        💬 {c.note}
+                                                        💬 {row.note}
                                                     </div>
                                                 )}
                                             </div>
                                         );
                                     })}
-                                </div>
-                            )}
-
-                            {/* ── Raw property data from form ── */}
-                            {propEntries.length > 0 && (
-                                <div className={styles.techDataSummary}>
-                                    <h4 className={styles.techDataTitle}>📋 Kompletní data z formuláře klienta</h4>
-                                    <div className={styles.techDataGrid}>
-                                        {propEntries.map(({ key, label, value }) => (
-                                            <div key={key} className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>{label}</span>
-                                                <span className={styles.techDataValue}>{value}</span>
-                                            </div>
-                                        ))}
-                                    </div>
                                 </div>
                             )}
 
