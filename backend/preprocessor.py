@@ -81,42 +81,125 @@ def _dms_to_decimal(dms_tuple, ref: str) -> Optional[float]:
 
 
 def _extract_metadata(img: Image.Image, original_bytes: bytes) -> ImageMetadata:
-    """Extract EXIF metadata from PIL Image."""
+    """Extract EXIF metadata from PIL Image.
+    
+    Uses piexif as primary source, with PIL getexif() as fallback.
+    Tries multiple date tags: DateTimeOriginal > DateTimeDigitized > DateTime.
+    """
+    import logging
+    logger = logging.getLogger("preprocessor")
+    
     meta = ImageMetadata(
         original_format=img.format or "UNKNOWN",
         original_size_bytes=len(original_bytes),
     )
 
+    # ── Strategy 1: piexif (most reliable for GPS + full EXIF) ──
+    exif_dict = None
     try:
         exif_dict = piexif.load(original_bytes)
-    except Exception:
-        return meta
+    except Exception as e:
+        logger.debug(f"piexif.load failed: {e}")
 
-    # Device model
-    if piexif.ImageIFD.Model in exif_dict.get("0th", {}):
-        raw = exif_dict["0th"][piexif.ImageIFD.Model]
-        meta.device_model = raw.decode("utf-8", errors="ignore").strip("\x00 ")
+    if exif_dict:
+        # Device model
+        zeroth = exif_dict.get("0th", {})
+        if piexif.ImageIFD.Model in zeroth:
+            raw = zeroth[piexif.ImageIFD.Model]
+            meta.device_model = raw.decode("utf-8", errors="ignore").strip("\x00 ")
 
-    # Capture date
-    if piexif.ExifIFD.DateTimeOriginal in exif_dict.get("Exif", {}):
-        raw = exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal]
-        meta.capture_date = raw.decode("utf-8", errors="ignore").strip("\x00 ")
+        # Capture date — try multiple tags in priority order
+        exif_ifd = exif_dict.get("Exif", {})
+        date_tags = [
+            piexif.ExifIFD.DateTimeOriginal,    # Primary: when photo was taken
+            piexif.ExifIFD.DateTimeDigitized,    # Fallback: when digitized
+        ]
+        for tag in date_tags:
+            if tag in exif_ifd:
+                raw = exif_ifd[tag]
+                date_str = raw.decode("utf-8", errors="ignore").strip("\x00 ")
+                if date_str and date_str != "0000:00:00 00:00:00":
+                    meta.capture_date = date_str
+                    break
 
-    # GPS
-    gps_data = exif_dict.get("GPS", {})
-    if gps_data:
-        lat_dms = gps_data.get(piexif.GPSIFD.GPSLatitude)
-        lat_ref = gps_data.get(piexif.GPSIFD.GPSLatitudeRef, b"N")
-        lon_dms = gps_data.get(piexif.GPSIFD.GPSLongitude)
-        lon_ref = gps_data.get(piexif.GPSIFD.GPSLongitudeRef, b"E")
+        # If still no date, try DateTime from 0th IFD (last resort from piexif)
+        if not meta.capture_date and piexif.ImageIFD.DateTime in zeroth:
+            raw = zeroth[piexif.ImageIFD.DateTime]
+            date_str = raw.decode("utf-8", errors="ignore").strip("\x00 ")
+            if date_str and date_str != "0000:00:00 00:00:00":
+                meta.capture_date = date_str
 
-        if lat_dms and lon_dms:
-            if isinstance(lat_ref, bytes):
-                lat_ref = lat_ref.decode()
-            if isinstance(lon_ref, bytes):
-                lon_ref = lon_ref.decode()
-            meta.gps_latitude = _dms_to_decimal(lat_dms, lat_ref)
-            meta.gps_longitude = _dms_to_decimal(lon_dms, lon_ref)
+        # GPS
+        gps_data = exif_dict.get("GPS", {})
+        if gps_data:
+            lat_dms = gps_data.get(piexif.GPSIFD.GPSLatitude)
+            lat_ref = gps_data.get(piexif.GPSIFD.GPSLatitudeRef, b"N")
+            lon_dms = gps_data.get(piexif.GPSIFD.GPSLongitude)
+            lon_ref = gps_data.get(piexif.GPSIFD.GPSLongitudeRef, b"E")
+
+            if lat_dms and lon_dms:
+                if isinstance(lat_ref, bytes):
+                    lat_ref = lat_ref.decode()
+                if isinstance(lon_ref, bytes):
+                    lon_ref = lon_ref.decode()
+                meta.gps_latitude = _dms_to_decimal(lat_dms, lat_ref)
+                meta.gps_longitude = _dms_to_decimal(lon_dms, lon_ref)
+
+    # ── Strategy 2: PIL getexif() fallback (handles panoramas, edited photos) ──
+    if not meta.capture_date or not meta.device_model:
+        try:
+            pil_exif = img.getexif()
+            if pil_exif:
+                # Device model fallback
+                if not meta.device_model:
+                    model_val = pil_exif.get(0x0110)  # Model tag
+                    if model_val:
+                        meta.device_model = str(model_val).strip("\x00 ")
+
+                # Date fallback — try multiple tags
+                if not meta.capture_date:
+                    # Try EXIF IFD sub-tags
+                    exif_sub = pil_exif.get_ifd(0x8769)  # ExifIFD pointer
+                    if exif_sub:
+                        for tag_id in [0x9003, 0x9004]:  # DateTimeOriginal, DateTimeDigitized
+                            val = exif_sub.get(tag_id)
+                            if val and str(val).strip() != "0000:00:00 00:00:00":
+                                meta.capture_date = str(val).strip("\x00 ")
+                                break
+
+                    # Last resort: DateTime from main IFD
+                    if not meta.capture_date:
+                        dt_val = pil_exif.get(0x0132)  # DateTime tag
+                        if dt_val and str(dt_val).strip() != "0000:00:00 00:00:00":
+                            meta.capture_date = str(dt_val).strip("\x00 ")
+
+                # GPS fallback via PIL
+                if not meta.gps_latitude or not meta.gps_longitude:
+                    gps_ifd = pil_exif.get_ifd(0x8825)  # GPSInfo pointer
+                    if gps_ifd:
+                        lat = gps_ifd.get(2)   # GPSLatitude
+                        lat_r = gps_ifd.get(1)  # GPSLatitudeRef
+                        lon = gps_ifd.get(4)   # GPSLongitude
+                        lon_r = gps_ifd.get(3)  # GPSLongitudeRef
+                        if lat and lon:
+                            try:
+                                lat_dec = lat[0] + lat[1] / 60 + lat[2] / 3600
+                                lon_dec = lon[0] + lon[1] / 60 + lon[2] / 3600
+                                if lat_r == "S":
+                                    lat_dec = -lat_dec
+                                if lon_r == "W":
+                                    lon_dec = -lon_dec
+                                meta.gps_latitude = round(lat_dec, 6)
+                                meta.gps_longitude = round(lon_dec, 6)
+                            except (TypeError, IndexError, ZeroDivisionError):
+                                pass
+        except Exception as e:
+            logger.debug(f"PIL getexif fallback failed: {e}")
+
+    if meta.capture_date:
+        logger.info(f"EXIF date extracted: {meta.capture_date}")
+    else:
+        logger.warning(f"No EXIF date found in image (format={meta.original_format})")
 
     return meta
 
