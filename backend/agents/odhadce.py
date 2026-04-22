@@ -246,185 +246,146 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-async def _fetch_sreality_samples(
+async def _fetch_apify_samples(
     lat: float | None,
     lon: float | None,
     floor_area_m2: int,
-    radius_km: int = 5,
-    max_km: int = 50,
     count: int = 20,
-    district_id: int | None = None,
+    category: str = "domy",
 ) -> list[dict]:
-    """Načte reálné inzeráty RD ze sreality.cz API.
+    """Načte reálné inzeráty ze sreality.cz přes Apify actor.
 
-    Sreality GPS filtr (locality_gps_*) přestal fungovat – API ho ignoruje
-    a vrací domy z celé ČR. Proto VŽDY filtrujeme přes district_id.
-    GPS souřadnice používáme pouze pro výpočet vzdálenosti a řazení výsledků.
+    Apify actor 'LozSX930wmiwBDeEl' scrapuje SReality a vrací strukturovaná data
+    včetně detailů (plocha, stav, rok stavby, obrázky, GPS).
+    Volání je synchronní (actor.call čeká na dokončení), proto ho pouštíme přes
+    asyncio.to_thread, aby neblokoval event loop.
     """
+    import asyncio
 
-    # Velikostní rozsah: plocha ±50 % (min 40 m², max 500 m²)
-    size_min = max(40, int(floor_area_m2 * 0.5))
-    size_max = min(500, int(floor_area_m2 * 1.5))
-
-    params: dict = {
-        "category_main_cb": 2,    # nemovitosti
-        "category_sub_cb": 37,    # rodinné domy
-        "category_type_cb": 1,    # prodej
-        "usable_area_min": size_min,
-        "usable_area_max": size_max,
-        "per_page": count,
-        "sort": 0,
-    }
-
-    # ALWAYS use district_id — GPS params on Sreality API are broken (ignored)
-    if district_id:
-        params["locality_district_id"] = district_id
-    # No GPS params — they don't work on Sreality anymore
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Referer": "https://www.sreality.cz/",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get("https://www.sreality.cz/api/cs/v2/estates",
-                                    params=params, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as e:
-        print(f"Sreality fetch error: {e}")
+    apify_token = os.environ.get("APIFY_API_TOKEN", "")
+    if not apify_token:
+        print("APIFY_API_TOKEN not set – cannot fetch samples")
         return []
 
-    estates = data.get("_embedded", {}).get("estates", [])
+    input_config = {
+        "portals": ["sreality"],
+        "categories": [category],
+        "offerType": ["prodej"],
+        "regions": [],           # Celá ČR – AI vybere nejrelevantnější
+        "maxListings": count,
+        "enableHistory": False,
+    }
+
+    def _run_actor():
+        """Synchronní volání Apify actoru – poběží v threadu."""
+        from apify_client import ApifyClient
+        client = ApifyClient(token=apify_token)
+        try:
+            run = client.actor("LozSX930wmiwBDeEl").call(run_input=input_config)
+            dataset_id = run.get("defaultDatasetId")
+            if not dataset_id:
+                print("Apify actor run finished but no dataset ID found")
+                return []
+            items = list(client.dataset(dataset_id).iterate_items())
+            return items
+        except Exception as e:
+            print(f"Apify actor error: {e}")
+            return []
+
+    raw_items = await asyncio.to_thread(_run_actor)
+    if not raw_items:
+        return []
+
     results = []
-    for i, e in enumerate(estates, 1):
-        seo = e.get("seo", {})
-        hash_id = e.get("hash_id")
-        locality_slug = seo.get("locality", "")
-        zdroj_url = (
-            f"https://www.sreality.cz/detail/prodej/dum/rodinny/{locality_slug}/{hash_id}"
-            if hash_id else None
-        )
-
-        images = e.get("_links", {}).get("images", [])
-        raw_img = images[0].get("href") if images else None
-        if raw_img:
-            # Fix image URL to get a working CDN preview
-            obrazek_url = re.sub(r"fl=res,\d+,\d+", "fl=res,400,300", raw_img)
-            obrazek_url = re.sub(r"/\d+x\d+/", "/400x300/", obrazek_url)
-        else:
-            obrazek_url = None
-
-        name = e.get("name", "")
-
-        # Lidsky čitelná adresa
-        def slug_to_address(slug: str) -> str:
-            parts = [p for p in slug.split("-") if p]
-            unique: list[str] = []
-            for p in parts:
-                if not unique or p != unique[-1]:
-                    unique.append(p)
-            return ", ".join(w.capitalize() for w in unique if w)
-
-        adresa = slug_to_address(locality_slug) if locality_slug else name
-
-        price = e.get("price_czk", {}).get("value_raw", 0) or 0
+    for i, item in enumerate(raw_items, 1):
+        # Map Apify output fields → internal structure
+        price = 0
+        price_raw = item.get("price")
+        if isinstance(price_raw, (int, float)):
+            price = int(price_raw)
+        elif isinstance(price_raw, str):
+            try:
+                price = int(re.sub(r"[^\d]", "", price_raw) or "0")
+            except (ValueError, TypeError):
+                pass
         if price <= 1:
             continue
 
-        # Parse plocha z názvu jako záloha (bude přepsána z detailu)
-        m2_matches = re.findall(r"(\d+)\s*m²", name)
-        size_m2 = int(m2_matches[0]) if m2_matches else 0
-        land_m2 = int(m2_matches[1]) if len(m2_matches) > 1 else 0
+        # Size
+        size_m2 = 0
+        size_raw = item.get("size_m2") or item.get("usable_area")
+        if size_raw:
+            try:
+                size_m2 = int(re.sub(r"[^\d]", "", str(size_raw)) or "0")
+            except (ValueError, TypeError):
+                pass
+        # Fallback: parse from title
+        if not size_m2:
+            title = item.get("title") or ""
+            m2_matches = re.findall(r"(\d+)\s*m[²2]", title)
+            if m2_matches:
+                size_m2 = int(m2_matches[0])
 
-        # GPS z list API
-        gps = e.get("gps", {})
-        gps_lat = gps.get("lat")
-        gps_lon = gps.get("lon")
+        # Land area
+        land_m2 = 0
+        land_raw = item.get("land_area") or item.get("plot_area")
+        if land_raw:
+            try:
+                land_m2 = int(re.sub(r"[^\d]", "", str(land_raw)) or "0")
+            except (ValueError, TypeError):
+                pass
 
-        # Compute distance for sorting (no hard cutoff — district filter handles locality)
+        # Images
+        images = item.get("images") or []
+        obrazek_url = images[0] if images else None
+
+        # GPS
+        gps_lat = item.get("GPS_lat") or item.get("gps_lat") or item.get("latitude")
+        gps_lon = item.get("GPS_lon") or item.get("gps_lon") or item.get("longitude")
+        try:
+            gps_lat = float(gps_lat) if gps_lat else None
+            gps_lon = float(gps_lon) if gps_lon else None
+        except (ValueError, TypeError):
+            gps_lat = gps_lon = None
+
+        # Distance
         distance_km = None
         if lat and lon and gps_lat and gps_lon:
             distance_km = _haversine_km(lat, lon, gps_lat, gps_lon)
+
+        # Address
+        adresa = item.get("location") or item.get("address") or item.get("title") or ""
+
+        # Condition / details (Apify actor often includes these directly)
+        stav = item.get("condition") or item.get("stav") or ""
+        rok_stavby = str(item.get("year_built") or item.get("rok_stavby") or "")
+        typ_domu = item.get("building_type") or item.get("house_type") or item.get("typ_domu") or ""
+        pocet_podlazi = str(item.get("floors") or item.get("podlazi") or "")
+
+        # Source URL
+        zdroj_url = item.get("url") or item.get("link") or None
+        hash_id = item.get("hash_id") or item.get("id") or i
 
         results.append({
             "id": i,
             "hash_id": hash_id,
             "adresa": adresa,
             "cena_czk": price,
-            "velikost_domu_m2": size_m2,
+            "velikost_domu_m2": size_m2 if size_m2 > 0 else floor_area_m2,
             "velikost_pozemku_m2": land_m2,
-            "stav": "",
-            "rok_stavby": "",
-            "typ_domu": "",
-            "pocet_podlazi": "",
+            "stav": stav,
+            "rok_stavby": rok_stavby,
+            "typ_domu": typ_domu,
+            "pocet_podlazi": pocet_podlazi,
             "zdroj_url": zdroj_url,
             "obrazek_url": obrazek_url,
             "gps": {"lat": gps_lat, "lon": gps_lon} if gps_lat and gps_lon else None,
             "distance_km": round(distance_km, 1) if distance_km is not None else None,
         })
 
-    # Sort by distance so AI gets closest samples first
+    # Sort by distance (closest first) if we have coordinates
     results.sort(key=lambda x: x.get("distance_km") or 999)
     return results
-
-
-async def _fetch_sample_detail(hash_id: int | str) -> dict:
-    """Fetch structured detail data for a single estate from Sreality detail API."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Referer": "https://www.sreality.cz/",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=6) as client:
-            resp = await client.get(
-                f"https://www.sreality.cz/api/cs/v2/estates/{hash_id}",
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as e:
-        print(f"Sreality detail fetch error for {hash_id}: {e}")
-        return {}
-
-    items = data.get("items", [])
-    detail = {}
-    for item in items:
-        name = (item.get("name") or "").strip()
-        value = item.get("value")
-        name_lower = name.lower()
-
-        if "užitná" in name_lower and "ploch" in name_lower:
-            try:
-                detail["usable_area"] = int(re.sub(r"[^\d]", "", str(value)))
-            except (ValueError, TypeError):
-                pass
-        elif "celková plocha" == name_lower or "celková ploch" in name_lower:
-            if "usable_area" not in detail:
-                try:
-                    detail["usable_area"] = int(re.sub(r"[^\d]", "", str(value)))
-                except (ValueError, TypeError):
-                    pass
-        elif "plocha pozemku" in name_lower:
-            try:
-                detail["land_area"] = int(re.sub(r"[^\d]", "", str(value)))
-            except (ValueError, TypeError):
-                pass
-        elif "stav objektu" in name_lower or "stav" == name_lower:
-            detail["condition"] = str(value).strip()
-        elif "rok kolaudace" in name_lower or "rok dokončení" in name_lower:
-            try:
-                detail["year_built"] = str(value).strip()
-            except (ValueError, TypeError):
-                pass
-        elif "typ domu" in name_lower or "poloha domu" in name_lower:
-            detail["house_type"] = str(value).strip()
-        elif "podlaží" in name_lower:
-            detail["floors"] = str(value).strip()
-
-    return detail
 
 
 async def _download_image_bytes(url: str, max_bytes: int = 200_000) -> bytes | None:
@@ -465,68 +426,17 @@ class OdhadceAgent(BaseAgent):
         district_id: int | None,
         total_count: int = 20,
     ) -> list[dict]:
-        """Prohledá okolní okresy v celém kraji a vrátí vzorky seřazené dle GPS vzdálenosti.
+        """Stáhne vzorky přes Apify actor a seřadí dle GPS vzdálenosti.
 
-        1. Najde všechny okresy ve stejném kraji (regionu)
-        2. Paralelně stáhne nabídky z každého okresu
-        3. Sloučí, deduplikuje (hash_id), seřadí dle vzdálenosti
-        4. Vrátí top `total_count` nejbližších vzorků
+        Apify actor prohledává celou ČR, takže nepotřebujeme multi-district logiku.
+        Vzdálenost se počítá z GPS souřadnic, pokud jsou dostupné.
         """
-        import asyncio
-
-        if not district_id:
-            # Bez okresu - fetch bez lokalizačního filtru
-            self.log("Bez okresu: hledám RD bez lokalizačního filtru...", "warn")
-            return await _fetch_sreality_samples(lat, lon, floor_area_m2, count=total_count)
-
-        # Najdi všechny okresy v tomto kraji
-        all_districts = _get_region_district_ids(district_id)
-        self.log(
-            f"Prohledávám {len(all_districts)} okresů v kraji "
-            f"(primární: {district_id}, celkem: {all_districts})...", "thinking"
+        self.log("Stahuji vzorky z realitních portálů přes Apify...", "thinking")
+        samples = await _fetch_apify_samples(
+            lat, lon, floor_area_m2, count=total_count, category="domy"
         )
-
-        # Paralelní fetch ze všech okresů (sem=3 aby se API nepřetížilo)
-        sem = asyncio.Semaphore(3)
-
-        async def _fetch_from_district(did: int, count: int) -> list[dict]:
-            async with sem:
-                return await _fetch_sreality_samples(
-                    lat, lon, floor_area_m2, district_id=did, count=count
-                )
-
-        tasks = []
-        for i, did in enumerate(all_districts):
-            # Primární okres → více výsledků, ostatní méně
-            count = 15 if i == 0 else 10
-            tasks.append(_fetch_from_district(did, count))
-
-        results_per_district = await asyncio.gather(*tasks)
-
-        # Sloučit a deduplikovat podle hash_id
-        seen_hashes: set = set()
-        merged: list[dict] = []
-        for samples in results_per_district:
-            for s in samples:
-                hid = s.get("hash_id")
-                if hid and hid in seen_hashes:
-                    continue
-                if hid:
-                    seen_hashes.add(hid)
-                merged.append(s)
-
-        # Seřadit dle GPS vzdálenosti (nejbližší první)
-        merged.sort(key=lambda x: x.get("distance_km") or 999)
-
-        # Přeřadit ID sekvenčně
-        for i, s in enumerate(merged, 1):
-            s["id"] = i
-
-        self.log(
-            f"Nalezeno {len(merged)} kandidátů z {len(all_districts)} okresů, "
-            f"vracím {min(len(merged), total_count)} nejbližších.", "info"
-        )
-        return merged[:total_count]
+        self.log(f"Nalezeno {len(samples)} kandidátů, vracím {min(len(samples), total_count)} nejbližších.", "info")
+        return samples[:total_count]
 
     async def run(self, context: dict) -> AgentResult:
         self.log("Zahajuji odhad obvyklé tržní ceny (NHZP)...", "info")
@@ -594,34 +504,8 @@ class OdhadceAgent(BaseAgent):
                 errors=[msg]
             )
 
-        # ── Stáhni detaily vzorků – omezená paralelizace (sem=3 pro RAM) ──
-        self.log(f"Stahuji detaily {len(raw_samples)} vzorků ze Sreality...", "thinking")
-        import asyncio
-        sem_detail = asyncio.Semaphore(3)
-
-        async def _fetch_detail_limited(s):
-            if not s.get("hash_id"):
-                return
-            async with sem_detail:
-                try:
-                    detail = await _fetch_sample_detail(s["hash_id"])
-                    if isinstance(detail, dict):
-                        if detail.get("usable_area") and detail["usable_area"] > 0:
-                            s["velikost_domu_m2"] = detail["usable_area"]
-                        if detail.get("land_area") and detail["land_area"] > 0:
-                            s["velikost_pozemku_m2"] = detail["land_area"]
-                        if detail.get("condition"):
-                            s["stav"] = detail["condition"]
-                        if detail.get("year_built"):
-                            s["rok_stavby"] = detail["year_built"]
-                        if detail.get("house_type"):
-                            s["typ_domu"] = detail["house_type"]
-                        if detail.get("floors"):
-                            s["pocet_podlazi"] = detail["floors"]
-                except Exception:
-                    pass
-
-        await asyncio.gather(*[_fetch_detail_limited(s) for s in raw_samples])
+        # Apify actor vrací detaily přímo (stav, rok_stavby, typ_domu atd.),
+        # takže nepotřebujeme separátní detail fetch jako u starého SReality API.
 
         # Fallback plochy
         for s in raw_samples:

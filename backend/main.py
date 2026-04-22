@@ -86,12 +86,15 @@ async def debug_config():
 
 @app.get("/api/proxy-image")
 async def proxy_image(url: str):
-    """Proxy image from sreality CDN to avoid CORS restrictions in browser."""
+    """Proxy image from sreality/Apify CDN to avoid CORS restrictions in browser."""
     from fastapi.responses import Response
     decoded = unquote(url)
-    # Only allow sreality CDN to prevent abuse
-    if "sdn.cz" not in decoded:
-        raise HTTPException(status_code=400, detail="Nepodporovaný zdroj obrázku.")
+    # Allow sreality CDN and common real estate image CDNs
+    allowed_domains = ["sdn.cz", "sreality.cz", "img.sreality.cz", "d18-a.sdn.cz", "apify.com"]
+    if not any(domain in decoded for domain in allowed_domains):
+        # For Apify-sourced URLs, allow any https image URL
+        if not decoded.startswith("https://"):
+            raise HTTPException(status_code=400, detail="Nepodporovaný zdroj obrázku.")
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Referer": "https://www.sreality.cz/",
