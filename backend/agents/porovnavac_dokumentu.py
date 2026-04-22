@@ -264,7 +264,7 @@ class PorovnavacDokumentuAgent(BaseAgent):
                 system_instruction=self.system_prompt,
                 contents=parts,
                 response_mime_type="application/json",
-                max_output_tokens=3000,
+                max_output_tokens=8000,
             )
 
             self.log("AI porovnání dokončeno.", "info")
@@ -273,6 +273,7 @@ class PorovnavacDokumentuAgent(BaseAgent):
             verdict = ai_result.get("verdict", "UNKNOWN")
             confidence = ai_result.get("confidence", 0.0)
             checks = ai_result.get("checks", [])
+            self.log(f"AI vrátila {len(checks)} checks, verdict={verdict}")
             ai_warnings = ai_result.get("warnings", [])
             recommendations = ai_result.get("recommendations", [])
             overall_summary = ai_result.get("overall_summary", "")

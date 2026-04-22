@@ -1318,10 +1318,27 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                         checksByAlias[key] = c;
                     });
 
-                    // Find check that matches a field config by aliases
+                    // Debug: log what checks we got from AI
+                    if (checks.length > 0) {
+                        console.log('[DocComparator] AI checks received:', checks.map((c: any) => c.field));
+                    } else {
+                        console.warn('[DocComparator] No checks in AI response. Details:', docDetails);
+                    }
+
+                    // Find check that matches a field config by aliases (fuzzy substring matching)
                     const findCheck = (cfg: typeof FIELD_CONFIG[0]): any | null => {
-                        for (const alias of [cfg.label.toLowerCase(), ...cfg.aliases]) {
+                        const candidates = [cfg.label.toLowerCase(), cfg.key.toLowerCase(), ...cfg.aliases.map(a => a.toLowerCase())];
+                        // 1) Exact match
+                        for (const alias of candidates) {
                             if (checksByAlias[alias]) return checksByAlias[alias];
+                        }
+                        // 2) Fuzzy: check if any candidate is contained in a check field or vice versa
+                        for (const [checkKey, checkObj] of Object.entries(checksByAlias)) {
+                            for (const alias of candidates) {
+                                if (checkKey.includes(alias) || alias.includes(checkKey)) {
+                                    return checkObj;
+                                }
+                            }
                         }
                         return null;
                     };
