@@ -145,15 +145,50 @@ export default function PipelineCanvas({
         onStart();
     };
 
-    // Merge WS statuses with simulated ones
+    // Merge WS statuses with simulated ones — ENFORCE sequential visual order
     const getEffectiveStatus = (name: string, idx: number): string => {
-        const wsStatus = agentStatuses[name];
-        if (wsStatus && wsStatus !== 'idle') return wsStatus;
         if (!started) return 'idle';
-        if (simulatedIdx < 0) return wsStatus || 'idle';
-        if (idx < simulatedIdx) return 'success';
-        if (idx === simulatedIdx) return 'processing';
-        return 'queued';
+
+        // Collect real WS statuses
+        const wsStatus = agentStatuses[name];
+        const isDone = (s: string) => ['success', 'fail', 'warn'].includes(s);
+
+        // Check if all PREVIOUS agents (by visual order) are done
+        const allPreviousDone = AGENTS_CONFIG.slice(0, idx).every((prev) => {
+            const prevWs = agentStatuses[prev.name];
+            // Count simulated-done agents too
+            if (prevWs && isDone(prevWs)) return true;
+            if (simulatedIdx >= 0 && AGENTS_CONFIG.findIndex(a => a.name === prev.name) < simulatedIdx) return true;
+            return false;
+        });
+
+        // If this agent has a real terminal status and all previous are done → show it
+        if (wsStatus && isDone(wsStatus) && allPreviousDone) return wsStatus;
+
+        // If this agent is processing but previous aren't all done → show as queued
+        if (wsStatus === 'processing' && !allPreviousDone) return 'queued';
+
+        // If all previous are done and this agent has WS 'processing' → show it
+        if (wsStatus === 'processing' && allPreviousDone) return 'processing';
+
+        // If all previous are done and this agent already finished (but out of order) → show done
+        if (wsStatus && isDone(wsStatus)) return wsStatus;
+
+        // Simulation fallback (when WS isn't delivering)
+        if (simulatedIdx >= 0) {
+            if (idx < simulatedIdx) return 'success';
+            if (idx === simulatedIdx) return 'processing';
+            return 'queued';
+        }
+
+        // Default: if all previous done and no WS status yet → this is the next "processing"
+        if (allPreviousDone && started && idx > 0) {
+            // Check if at least one agent has real WS data
+            const hasAnyWs = Object.values(agentStatuses).some(s => s && s !== 'idle');
+            if (hasAnyWs) return 'queued';
+        }
+
+        return wsStatus || 'idle';
     };
 
     const completedCount = AGENTS_CONFIG.filter((a, i) => {
