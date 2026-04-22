@@ -690,6 +690,11 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                             const hasDate = !!meta.capture_date;
                                             const formattedDate = formatExifDate(meta.capture_date);
 
+                                            const cats = cls.categories || [];
+                                            const isMain = cats.some((c: string) => c.startsWith('EXTERIER_') || c.startsWith('INTERIER_') || c === 'PUDORYS');
+                                            const isVedlejsi = cats.includes('VEDLEJSI_STAVBA') && !isMain;
+                                            const stavbaName = isVedlejsi ? 'Vedlejší stavba' : 'Hlavní stavba';
+
                                             return (
                                                 <div key={idx} style={{
                                                     display: 'flex',
@@ -721,20 +726,23 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                                     {/* Photo info */}
                                                     <div style={{ flex: 1, minWidth: '160px' }}>
                                                         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary, #0f172a)', marginBottom: '2px' }}>
-                                                            {meta.original_filename || photoId}
+                                                            {stavbaName} - {meta.original_filename || photoId}
                                                         </div>
                                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                                            {(cls.categories || []).map((cat: string, ci: number) => (
-                                                                <span key={ci} style={{
-                                                                    fontSize: '10px',
-                                                                    fontWeight: 600,
-                                                                    padding: '2px 6px',
-                                                                    borderRadius: '4px',
-                                                                    background: '#eef1ff',
-                                                                    color: '#1428A0',
-                                                                    textTransform: 'uppercase',
-                                                                }}>{cat.replace(/^(EXTERIER_|INTERIER_)/, '')}</span>
-                                                            ))}
+                                                            {cats.map((cat: string, ci: number) => {
+                                                                if (isVedlejsi && cat === 'VEDLEJSI_STAVBA') return null; // We already show it in the name
+                                                                return (
+                                                                    <span key={ci} style={{
+                                                                        fontSize: '10px',
+                                                                        fontWeight: 600,
+                                                                        padding: '2px 6px',
+                                                                        borderRadius: '4px',
+                                                                        background: '#eef1ff',
+                                                                        color: '#1428A0',
+                                                                        textTransform: 'uppercase',
+                                                                    }}>{cat.replace(/^(EXTERIER_|INTERIER_)/, '')}</span>
+                                                                );
+                                                            })}
                                                         </div>
                                                     </div>
 
@@ -1278,11 +1286,55 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                             ? '✗ Neshoda'
                             : '⚠ Částečná shoda';
 
+                    // Map Czech property_data keys to human labels
+                    const PROP_LABELS: Record<string, string> = {
+                        stavba_dokoncena: 'Rok dokončení',
+                        stav_rodinneho_domu: 'Stav domu',
+                        pocet_podlazi: 'Počet podlaží',
+                        typ_strechy: 'Typ střechy',
+                        podsklepeni: 'Podsklepení',
+                        celkova_podlahova_plocha: 'Celk. podlahová plocha',
+                        plocha_pozemku: 'Plocha pozemku',
+                        typ_vytapeni: 'Vytápění',
+                        adresa: 'Adresa',
+                        podkrovi: 'Podkroví',
+                        podkrovi_obytne: 'Obytné podkroví',
+                        vyuziti_podkrovi_procent: 'Využití podkroví',
+                        // English fallback keys (legacy)
+                        year_built: 'Rok dokončení',
+                        floor_count: 'Počet podlaží',
+                        total_floor_area: 'Celk. podlahová plocha',
+                        roof_type: 'Typ střechy',
+                        condition: 'Stav domu',
+                        basement: 'Podsklepení',
+                        heating: 'Vytápění',
+                        property_address: 'Adresa',
+                    };
+
+                    // Build a map from check field name to check result for cross-referencing
+                    const checksByField: Record<string, any> = {};
+                    checks.forEach((c: any) => {
+                        const key = (c.field || '').toLowerCase();
+                        checksByField[key] = c;
+                    });
+
+                    // Get property data entries that have a value
+                    const propEntries = Object.entries(propData)
+                        .filter(([_, v]) => v != null && v !== '')
+                        .map(([k, v]) => ({
+                            key: k,
+                            label: PROP_LABELS[k] || k,
+                            value: String(v),
+                        }));
+
+                    const matchCount = checks.filter((c: any) => c.match).length;
+                    const mismatchCount = checks.length - matchCount;
+
                     return (
                         <div className={styles.comparisonCard}>
                             <div className={styles.comparisonHeader}>
                                 <h3 className={styles.comparisonTitle}>
-                                    📄 Porovnání PDF formuláře s fotodokumentací
+                                    📄 Porovnání formuláře s fotodokumentací
                                 </h3>
                                 <span
                                     className={styles.comparisonVerdictBadge}
@@ -1295,62 +1347,29 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                 </span>
                             </div>
 
-                            {/* Property data summary */}
-                            {Object.keys(propData).length > 0 && (
-                                <div className={styles.techDataSummary}>
-                                    <h4 className={styles.techDataTitle}>📋 Technická data z formuláře</h4>
-                                    <div className={styles.techDataGrid}>
-                                        {propData.year_built && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Rok dokončení</span>
-                                                <span className={styles.techDataValue}>{propData.year_built}</span>
-                                            </div>
-                                        )}
-                                        {propData.floor_count && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Počet podlaží</span>
-                                                <span className={styles.techDataValue}>{propData.floor_count}</span>
-                                            </div>
-                                        )}
-                                        {propData.total_floor_area && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Celk. podl. plocha</span>
-                                                <span className={styles.techDataValue}>{propData.total_floor_area} m²</span>
-                                            </div>
-                                        )}
-                                        {propData.roof_type && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Typ střechy</span>
-                                                <span className={styles.techDataValue}>{propData.roof_type}</span>
-                                            </div>
-                                        )}
-                                        {propData.condition && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Stav</span>
-                                                <span className={styles.techDataValue}>{propData.condition}</span>
-                                            </div>
-                                        )}
-                                        {propData.basement && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Podsklepení</span>
-                                                <span className={styles.techDataValue}>{propData.basement}</span>
-                                            </div>
-                                        )}
-                                        {propData.heating && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Vytápění</span>
-                                                <span className={styles.techDataValue}>{propData.heating}</span>
-                                            </div>
-                                        )}
-                                        {propData.property_address && (
-                                            <div className={styles.techDataItem}>
-                                                <span className={styles.techDataLabel}>Adresa</span>
-                                                <span className={styles.techDataValue}>{propData.property_address}</span>
-                                            </div>
-                                        )}
-                                    </div>
+                            {/* Match/Mismatch summary chips */}
+                            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                                <div style={{
+                                    display: 'flex', alignItems: 'center', gap: '6px',
+                                    padding: '6px 14px', borderRadius: '100px',
+                                    background: '#ecfdf5', color: '#059669',
+                                    fontSize: '13px', fontWeight: 600,
+                                    border: '1px solid #86efac',
+                                }}>
+                                    ✓ {matchCount} shod
                                 </div>
-                            )}
+                                {mismatchCount > 0 && (
+                                    <div style={{
+                                        display: 'flex', alignItems: 'center', gap: '6px',
+                                        padding: '6px 14px', borderRadius: '100px',
+                                        background: '#fef2f2', color: '#dc2626',
+                                        fontSize: '13px', fontWeight: 600,
+                                        border: '1px solid #fecaca',
+                                    }}>
+                                        ✗ {mismatchCount} neshod
+                                    </div>
+                                )}
+                            </div>
 
                             {overallSummary && (
                                 <div className={styles.comparisonText}>
@@ -1358,42 +1377,114 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                                 </div>
                             )}
 
-                            {/* Checks table */}
+                            {/* ── Side-by-side comparison cards ── */}
                             {checks.length > 0 && (
-                                <div className={styles.checksTable}>
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>Parametr</th>
-                                                <th>Formulář</th>
-                                                <th>Z fotek</th>
-                                                <th>Shoda</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {checks.map((c: any, i: number) => (
-                                                <tr key={i} className={c.match ? styles.checkMatch : styles.checkMismatch}>
-                                                    <td className={styles.checkField}>{c.field}</td>
-                                                    <td>{c.declared || '–'}</td>
-                                                    <td>{c.observed || '–'}</td>
-                                                    <td>
-                                                        <span className={c.match ? styles.checkYes : styles.checkNo}>
-                                                            {c.match ? '✓' : '✗'}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                    {checks.some((c: any) => c.note) && (
-                                        <div className={styles.checkNotes}>
-                                            {checks.filter((c: any) => c.note).map((c: any, i: number) => (
-                                                <div key={i} className={styles.checkNote}>
-                                                    <strong>{c.field}:</strong> {c.note}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+                                    {checks.map((c: any, i: number) => {
+                                        const isMatch = c.match;
+                                        const borderColor = isMatch ? '#86efac' : '#fecaca';
+                                        const bgColor = isMatch ? '#f0fdf4' : '#fef2f2';
+                                        const iconColor = isMatch ? '#059669' : '#dc2626';
+
+                                        return (
+                                            <div key={i} style={{
+                                                background: '#ffffff',
+                                                border: `1px solid ${borderColor}`,
+                                                borderRadius: '14px',
+                                                overflow: 'hidden',
+                                                boxShadow: '0 1px 6px rgba(0,0,0,0.03)',
+                                            }}>
+                                                {/* Header with field name and match status */}
+                                                <div style={{
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                    padding: '12px 18px',
+                                                    background: bgColor,
+                                                    borderBottom: `1px solid ${borderColor}`,
+                                                }}>
+                                                    <span style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a', textTransform: 'capitalize' }}>
+                                                        {c.field}
+                                                    </span>
+                                                    <span style={{
+                                                        display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                                        fontSize: '12px', fontWeight: 700, color: iconColor,
+                                                        padding: '4px 12px', borderRadius: '100px',
+                                                        background: `${iconColor}15`,
+                                                    }}>
+                                                        {isMatch ? '✓ Shoda' : '✗ Neshoda'}
+                                                    </span>
                                                 </div>
-                                            ))}
-                                        </div>
-                                    )}
+
+                                                {/* Two-column: Formulář vs AI */}
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '60px' }}>
+                                                    {/* Left: Client / Form data */}
+                                                    <div style={{
+                                                        padding: '14px 18px',
+                                                        borderRight: '1px solid #f1f5f9',
+                                                    }}>
+                                                        <div style={{
+                                                            fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+                                                            letterSpacing: '0.8px', color: '#94a3b8', marginBottom: '6px',
+                                                        }}>
+                                                            📋 Formulář klienta
+                                                        </div>
+                                                        <div style={{
+                                                            fontSize: '14px', fontWeight: 600, color: '#0f172a',
+                                                            lineHeight: 1.5,
+                                                        }}>
+                                                            {c.declared || '–'}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Right: AI findings */}
+                                                    <div style={{
+                                                        padding: '14px 18px',
+                                                    }}>
+                                                        <div style={{
+                                                            fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+                                                            letterSpacing: '0.8px', color: '#94a3b8', marginBottom: '6px',
+                                                        }}>
+                                                            🤖 AI zjištění z fotek
+                                                        </div>
+                                                        <div style={{
+                                                            fontSize: '14px', fontWeight: 600,
+                                                            color: isMatch ? '#0f172a' : '#dc2626',
+                                                            lineHeight: 1.5,
+                                                        }}>
+                                                            {c.observed || '–'}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Note (expandable detail) */}
+                                                {c.note && (
+                                                    <div style={{
+                                                        padding: '10px 18px 14px',
+                                                        borderTop: '1px solid #f1f5f9',
+                                                        fontSize: '12px', color: '#64748b',
+                                                        lineHeight: 1.6,
+                                                        background: '#fafbfc',
+                                                    }}>
+                                                        💬 {c.note}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* ── Raw property data from form ── */}
+                            {propEntries.length > 0 && (
+                                <div className={styles.techDataSummary}>
+                                    <h4 className={styles.techDataTitle}>📋 Kompletní data z formuláře klienta</h4>
+                                    <div className={styles.techDataGrid}>
+                                        {propEntries.map(({ key, label, value }) => (
+                                            <div key={key} className={styles.techDataItem}>
+                                                <span className={styles.techDataLabel}>{label}</span>
+                                                <span className={styles.techDataValue}>{value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
 
