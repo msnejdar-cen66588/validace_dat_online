@@ -45,7 +45,7 @@ KATEGORIE PRO KLASIFIKACI:
 - INTERIER_KOUPELNA: Koupelna / WC
 - INTERIER_CHODBA: Chodba, schodiště, vstupní hala
 - INTERIER_SKLEP: Sklep, suterén
-- INTERIER_PODKROVI: Podkroví, půdní prostor
+- INTERIER_PODKROVI: Podkroví, půdní prostor – klasifikuj jako podkroví POUZE pokud na fotce vidíš skutečně šikmé/zkosené stropy sledující tvar střechy (strop se snižuje ke stěnám). POZOR: širokoúhlý objektiv deformuje okraje fotky a rovné stropy se mohou jevit jako zkosené – to NENÍ podkroví! Nízký rovný strop také NENÍ podkroví.
 - INTERIER_OSTATNI: Jiné interiérové prostory (šatna, prádelna, technická místnost, garáž zevnitř)
 - VEDLEJSI_STAVBA: Vedlejší stavba — garáž, stodola, dílna, kůlna, zahradní domek
 - OKOLI: Zahrada, příjezdová cesta, okolí domu, pohled na pozemek

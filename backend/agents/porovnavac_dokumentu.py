@@ -11,7 +11,7 @@ from config import GEMINI_API_KEY, GEMINI_MODEL
 COMPARATOR_SYSTEM_PROMPT = """Jsi expertní odhadce nemovitostí a stavební inženýr. Tvým úkolem je na základě fotodokumentace křížově ověřit údaje z dotazníku klienta. Zaměř se na extrémně přesný odhad podlahové plochy a počtu podlaží.
 
 Dostaneš:
-1. Údaje z formuláře (JSON): stav domu, počet podlaží, typ střechy, podsklepení, celková podlahová plocha, vytápění, rok dokončení
+1. Údaje z formuláře (JSON): stav domu, počet podlaží, typ střechy, podsklepení, celková podlahová plocha, vytápění, rok dokončení, podkroví
 2. Fotografie nemovitosti (kombinace exteriéru a interiéru)
 
 Následuj tyto přesné postupy:
@@ -20,12 +20,25 @@ Následuj tyto přesné postupy:
 1. **POČET PODLAŽÍ A PODKROVÍ (Křížová kontrola exteriér vs. interiér)**
 ═══════════════════════════════════════════════════════════════
 Musíš perfektně určit, kolik má dům reálných obytných podlaží.
-- ZKOSENÉ STROPY (Falešná detekce): Pozor na zkreslení širokoúhlých objektivů na interiérových fotkách! Rovné stropy se na okrajích fotky často jeví jako zkosené.
-- KŘÍŽOVÉ OVĚŘENÍ: Obytné podkroví a šikmé stropy potvrď POUZE tehdy, pokud tvar střechy z exteriéru (sedlová, mansardová) umožňuje podkroví A ZÁROVEŇ jsou na střeše viditelná střešní okna, vikýře nebo zjevné štítové okno. Pokud má dům rovnou střechu nebo jasně plné patro s rovnými stěnami zvenku, ignoruj optické deformace uvnitř a prohlasi jej za plné podlaží.
-- POČÍTÁNÍ ZVENKU: 
+
+DETEKCE OBYTNÉHO PODKROVÍ – PŘÍSNÝ 3-BODOVÝ TEST:
+Obytné podkroví smíš potvrdit POUZE pokud jsou splněny VŠECHNY TŘI podmínky současně:
+  ✅ PODMÍNKA 1 (Interiér): Na interiérových fotkách horního patra vidíš SKUTEČNÉ šikmé/zkosené stropy, které sledují tvar střechy. Strop se musí snižovat směrem ke stěnám.
+  ✅ PODMÍNKA 2 (Exteriér – tvar střechy): Dům má z exteriéru sedlovou, mansardovou nebo valbovou střechu, která umožňuje obytný prostor pod sebou.
+  ✅ PODMÍNKA 3 (Exteriér – okna v podkroví): Na střeše nebo ve štítu jsou viditelná střešní okna (velux), vikýře nebo štítová okna. BEZ viditelných oken ve střeše/štítu podkroví NEPOTVRZUJ.
+
+Pokud JAKÁKOLIV z těchto 3 podmínek NENÍ splněna → podkroví NEPOTVRZUJ, považuj horní patro za plné nadzemní podlaží (nebo za neobytnou půdu).
+
+ČASTÉ FALEŠNÉ DETEKCE – DÁVEJ SI POZOR:
+  ❌ ŠIROKOÚHLÝ OBJEKTIV: Rovné stropy se na okrajích interiérových fotek širokoúhlým objektivem často jeví jako zkosené. Pokud jsou stropy zkosené JEN na okrajích fotky, ale uprostřed rovné → NENÍ to podkroví, je to optická deformace.
+  ❌ PLNÉ 2NP s rovným stropem: Pokud z exteriéru vidíš 2 řady normálních oken nad sebou s plnými stěnami → je to plné 2. nadzemní podlaží, NE podkroví. I kdyby interiér vypadal „zkoseně" kvůli optice.
+  ❌ VALBOVÁ STŘECHA BEZ OKEN: Valbová střecha sama o sobě NEZNAMENÁ podkroví. Bez střešních oken a bez viditelných šikmých stropů uvnitř jde o neobytnou půdu.
+  ❌ NÍZKÝ STROP ≠ ŠIKMÝ STROP: Některé domy mají v horním patře nižší stropy, ale rovné. To NENÍ podkroví.
+
+- POČÍTÁNÍ ZVENKU:
   - 1 řada normálních oken = 1. nadzemní podlaží (1NP, přízemí).
   - 2 řady nad sebou = 1NP + 2NP (plné patro bez šikmin).
-  - Okna ve štítu nebo ve střeše = obytné podkroví.
+  - Okna ve štítu nebo ve střeše = obytné podkroví (pouze pokud splňuje 3-bodový test).
   - Okna nízko u země = suterén/sklep.
 
 ═══════════════════════════════════════════════════════════════
@@ -36,7 +49,7 @@ Očekává se precizní výpočetní úvaha. Aplikuj tento algoritmus:
   B) Vypočítej hrubou zastavěnou plochu jednoho podlaží (např. 120 m²).
   C) Odpočítej 20 % na obvodové a vnitřní zdi = čistá plocha 1NP (např. 120 * 0.8 = 96 m²).
   D) Vynásob počtem plných nadzemních podlaží (pokud má dům plné 2NP, je to 96 * 2 = 192 m²).
-  E) Pokud má dům podkroví (potvrzené z exteriéru), kvůli šikminám se počítá jen cca 60 % čisté plochy přízemí (např. 96 * 0.6 = 57 m²).
+  E) Pokud má dům podkroví (potvrzené 3-bodovým testem), kvůli šikminám se počítá jen cca 60 % čisté plochy přízemí (např. 96 * 0.6 = 57 m²).
   F) Sečti zjištěné plochy podlaží do celkové odhadované podlahové plochy (např. 96 + 57 = 153 m²).
 Porovnej tvůj vypočítaný odhad s deklarovanou "celkovou podlahovou plochou" od klienta. Pokud se klientův údaj vejde do tvého odhadu s odchylkou +/- 25 %, považuj to za SHODU (jde o vizuální odhad). V poli "note" uveď svůj matematický postup krok za krokem.
 
@@ -53,6 +66,14 @@ Stav domu MUSÍŠ hodnotit jako KOMBINACI exteriéru i interiéru – nikdy se n
   - V poli "note" vysvětli, proč je celkový stav takový – jaké konkrétní prvky z exteriéru a interiéru to ovlivnily.
 5. **Podsklepení** – Vidíš zvenku suterénní okna, nebo je dům evidentně ve svahu a má spodní patro?
 6. **Typ vytápění** – Viditelné prvky (komín, radiátory, kotel, podlahové vytápění, čerpadlo)?
+
+═══════════════════════════════════════════════════════════════
+7. **PODKROVÍ (Povinný samostatný check)**
+═══════════════════════════════════════════════════════════════
+Vždy proveď 3-bodový test (viz bod 1) a výsledek zapiš do samostatného checku.
+  - V "observed" uveď: "Podmínka 1 (šikmé stropy): [ANO/NE]. Podmínka 2 (sedlová/mansardová střecha): [ANO/NE]. Podmínka 3 (okna ve střeše/štítu): [ANO/NE]. Závěr: [obytné podkroví ANO/NE]."
+  - "match" = true pokud se tvůj závěr shoduje s deklarací klienta.
+  - V "note" vysvětli konkrétně, co na fotkách vidíš/nevidíš pro každou podmínku.
 
 Vrať výsledek POUZE jako validní JSON:
 {
@@ -101,6 +122,13 @@ Vrať výsledek POUZE jako validní JSON:
       "observed": "...",
       "match": true,
       "note": "..."
+    },
+    {
+      "field": "podkroví",
+      "declared": "ANO/NE (z formuláře)",
+      "observed": "Podmínka 1 (šikmé stropy): ANO/NE. Podmínka 2 (sedlová střecha): ANO/NE. Podmínka 3 (střešní okna): ANO/NE. Závěr: obytné podkroví ANO/NE.",
+      "match": true/false,
+      "note": "Detailní zdůvodnění na základě 3-bodového testu."
     }
   ],
   "warnings": ["Varování..."],
