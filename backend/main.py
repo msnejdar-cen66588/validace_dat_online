@@ -45,6 +45,7 @@ app.add_middleware(
 )
 
 # In-memory session store
+MAX_SESSIONS = 5  # Limit concurrent sessions to prevent OOM on 512MB Render
 sessions: dict[str, dict] = {}
 orchestrators: dict[str, PipelineOrchestrator] = {}
 pipeline_results: dict[str, dict] = {}
@@ -53,6 +54,27 @@ global_websockets: dict[str, list[WebSocket]] = {}
 # Batch session store
 batch_sessions: dict[str, BatchSession] = {}
 batch_websockets: dict[str, list[WebSocket]] = {}
+
+
+def _evict_old_sessions(keep_id: str = ""):
+    """Evict oldest sessions when we exceed MAX_SESSIONS to prevent OOM."""
+    if len(sessions) <= MAX_SESSIONS:
+        return
+    # Sort sessions by creation order (dict insertion order in Python 3.7+)
+    session_ids = [sid for sid in sessions if sid != keep_id]
+    # Remove oldest sessions until we're under the limit
+    while len(sessions) > MAX_SESSIONS and session_ids:
+        old_id = session_ids.pop(0)
+        sessions.pop(old_id, None)
+        orchestrators.pop(old_id, None)
+        pipeline_results.pop(old_id, None)
+        global_websockets.pop(old_id, None)
+        # Clean up uploaded files
+        old_dir = os.path.join(UPLOAD_DIR, old_id)
+        if os.path.exists(old_dir):
+            shutil.rmtree(old_dir, ignore_errors=True)
+        print(f"[Memory] Evicted old session: {old_id}")
+    gc.collect()
 
 # Contract analysis session store (limited to save memory on free Render 512MB)
 MAX_CONTRACT_SESSIONS = 3
@@ -69,6 +91,25 @@ def _cleanup_contract_sessions():
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "service": "AI Validation Pipeline"}
+
+
+@app.get("/api/memory")
+async def memory_info():
+    """Return memory usage info for diagnostics on Render 512MB."""
+    import resource
+    rusage = resource.getrusage(resource.RUSAGE_SELF)
+    rss_mb = rusage.ru_maxrss / (1024 * 1024)  # macOS returns bytes, Linux returns KB
+    # On Linux (Render), ru_maxrss is in KB
+    import sys
+    if sys.platform == "linux":
+        rss_mb = rusage.ru_maxrss / 1024
+    return {
+        "rss_mb": round(rss_mb, 1),
+        "sessions": len(sessions),
+        "orchestrators": len(orchestrators),
+        "batch_sessions": len(batch_sessions),
+        "contract_sessions": len(contract_sessions),
+    }
 
 
 @app.get("/api/debug-config")
@@ -379,6 +420,11 @@ async def start_pipeline(
             sessions[session_id]["result"] = result
         except Exception as e:
             print(f"Pipeline error for session {session_id}: {e}")
+        finally:
+            # Free orchestrator memory after pipeline completes
+            orchestrators.pop(session_id, None)
+            gc.collect()
+            print(f"[Memory] Orchestrator freed for session {session_id}")
 
     # Dispatch to background
     background_tasks.add_task(run_and_store)
@@ -427,23 +473,25 @@ async def get_pipeline_state(session_id: str):
 
 @app.post("/api/pipeline/valuation/{session_id}")
 async def generate_valuation(
-    session_id: str, 
+    session_id: str,
+    background_tasks: BackgroundTasks,
     payload: dict = Body(None),
     model: str = None
 ):
-    """Run just the Valuation (Odhadce) agent to get comparative market estimation."""
+    """Run 4-step valuation pipeline as background task with WS updates."""
+    from valuation_pipeline import ValuationPipeline
+
+    _evict_old_sessions(keep_id=session_id)
+    gc.collect()
+
     session = sessions.get(session_id, {})
-    
-    # Use the model from query param, or fall back to the session's model, or default to gpt-5.4-mini
-    effective_model = model or session.get("model") or "gpt-5.4-mini"
-    
-    # Use provided overrides if any
+    effective_model = model or session.get("model") or "gemini"
+
     custom_address = payload.get("adresa") if payload else None
     custom_area = payload.get("plocha") if payload else None
     custom_land = payload.get("pozemek") if payload else None
     custom_condition = payload.get("stav") if payload else None
 
-    # We provide this override mapping in context
     context = {
         "session_id": session_id,
         "images": session.get("images", []),
@@ -456,15 +504,35 @@ async def generate_valuation(
             "stav": custom_condition
         }
     }
-    
-    agent = OdhadceAgent(model_name=effective_model)
-    result = await agent.run(context)
-    
-    # Store result optionally on session if needed
-    if session_id in sessions and "valuation" not in session:
-        session["valuation"] = result.to_dict()
-        
-    return result.to_dict()
+
+    pipeline = ValuationPipeline(session_id=session_id, model_name=effective_model)
+    # Attach existing WebSocket connections for real-time updates
+    pipeline.connections = global_websockets.get(session_id, [])
+
+    async def _run_valuation():
+        try:
+            result = await pipeline.run(context)
+            if session_id in sessions:
+                sessions[session_id]["valuation"] = result
+        except Exception as e:
+            print(f"Valuation pipeline error: {e}")
+        finally:
+            del pipeline
+            gc.collect()
+
+    background_tasks.add_task(_run_valuation)
+
+    return {"status": "started", "message": "Valuation pipeline started. Watch WebSocket for updates."}
+
+
+@app.get("/api/pipeline/valuation/{session_id}")
+async def get_valuation_result(session_id: str):
+    """Poll valuation results (fallback for WS)."""
+    session = sessions.get(session_id, {})
+    val = session.get("valuation")
+    if val:
+        return {"completed": True, **val}
+    return {"completed": False}
 
 
 @app.get("/api/pipeline/report/{session_id}")

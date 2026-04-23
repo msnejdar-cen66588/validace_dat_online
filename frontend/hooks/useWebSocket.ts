@@ -13,6 +13,7 @@ export interface WSMessage {
     elapsed_time?: number;
     result?: any;
     agents?: string[];
+    step?: string;
 }
 
 const MAX_RECONNECT_ATTEMPTS = 8;
@@ -30,6 +31,10 @@ export function useWebSocket(sessionId: string | null) {
     const [agentLogs, setAgentLogs] = useState<Record<string, WSMessage[]>>({});
     const [pipelineResult, setPipelineResult] = useState<any>(null);
     const [isRunning, setIsRunning] = useState(false);
+    // Valuation pipeline state
+    const [valuationSteps, setValuationSteps] = useState<Record<string, string>>({});
+    const [valuationResult, setValuationResult] = useState<any>(null);
+    const [isValuating, setIsValuating] = useState(false);
 
     // Fallback: HTTP polling — ONLY used after WebSocket max retries exhausted
     const startPolling = useCallback(() => {
@@ -135,6 +140,29 @@ export function useWebSocket(sessionId: string | null) {
                         setPipelineResult(msg.result);
                         stopPolling();
                         break;
+
+                    case 'valuation_start':
+                        setIsValuating(true);
+                        setValuationSteps({});
+                        setValuationResult(null);
+                        break;
+
+                    case 'valuation_step':
+                        if (msg.step && msg.status) {
+                            setValuationSteps(prev => ({ ...prev, [msg.step!]: msg.status! }));
+                        }
+                        if (msg.agent) {
+                            setAgentLogs(prev => ({
+                                ...prev,
+                                [msg.agent!]: [...(prev[msg.agent!] || []), msg],
+                            }));
+                        }
+                        break;
+
+                    case 'valuation_complete':
+                        setIsValuating(false);
+                        setValuationResult(msg.result);
+                        break;
                 }
             } catch (e) {
                 console.error('WS parse error:', e);
@@ -166,5 +194,8 @@ export function useWebSocket(sessionId: string | null) {
         pipelineResult,
         isRunning,
         sendMessage,
+        valuationSteps,
+        valuationResult,
+        isValuating,
     };
 }

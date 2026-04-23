@@ -4,11 +4,15 @@ import styles from './ResultsDashboard.module.css';
 import type { PipelineResult } from '@/lib/api';
 import { API_BASE } from '@/lib/api';
 import { generatePdfReport } from '@/lib/generatePdf';
+import ValuationLoader from './ValuationLoader';
 
 interface Props {
     result: PipelineResult;
     onReset: () => void;
     onEdit: () => void;
+    valuationSteps?: Record<string, string>;
+    valuationResult?: any;
+    isValuating?: boolean;
 }
 
 const AGENT_META: Record<string, { icon: string; label: string; color: string }> = {
@@ -125,7 +129,7 @@ function ValuationMap({ propertyGps, samples }: { propertyGps: { lat: number; lo
 }
 
 
-export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
+export default function ResultsDashboard({ result, onReset, onEdit, valuationSteps, valuationResult, isValuating }: Props) {
     const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
     const [valuation, setValuation] = useState<any>(null);
     const [isValuing, setIsValuing] = useState(false);
@@ -134,6 +138,17 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
     const [customCoeffs, setCustomCoeffs] = useState<Record<number, Record<string, string>>>({});
     const [setupData, setSetupData] = useState({ adresa: '', plocha: '', pozemek: '', stav: '' });
     const [isDownloading, setIsDownloading] = useState(false);
+
+    // Sync valuation result from WS
+    useEffect(() => {
+        if (valuationResult && valuationResult.status !== 'fail') {
+            setValuation(valuationResult);
+            setIsValuing(false);
+        } else if (valuationResult && valuationResult.status === 'fail') {
+            setValError(valuationResult.errors?.[0] || valuationResult.summary || 'Odhad se nezdařil');
+            setIsValuing(false);
+        }
+    }, [valuationResult]);
 
     const openSetup = () => {
         const pData = result.property_data || {} as any;
@@ -156,18 +171,28 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(setupData)
             });
-            if (!res.ok) throw new Error('Nepodařilo se vytvořit odhad');
-            const data = await res.json();
-            // Check if the agent returned a failure status
-            if (data.status === 'fail') {
-                const errMsg = data.errors?.[0] || data.summary || 'Odhad se nezdařil';
-                setValError(errMsg);
-            } else {
-                setValuation(data);
-            }
+            if (!res.ok) throw new Error('Nepodařilo se spustit odhad');
+            // Response is just {status: "started"} — results come via WS
+            // Start polling as fallback in case WS doesn't deliver
+            const pollInterval = setInterval(async () => {
+                try {
+                    const pollRes = await fetch(`${API_BASE}/api/pipeline/valuation/${result.session_id}`);
+                    const pollData = await pollRes.json();
+                    if (pollData.completed) {
+                        clearInterval(pollInterval);
+                        if (pollData.status === 'fail') {
+                            setValError(pollData.errors?.[0] || 'Odhad se nezdařil');
+                        } else {
+                            setValuation(pollData);
+                        }
+                        setIsValuing(false);
+                    }
+                } catch { /* keep polling */ }
+            }, 5000);
+            // Clear polling after 3 minutes max
+            setTimeout(() => clearInterval(pollInterval), 180000);
         } catch (err: any) {
             setValError(err.message);
-        } finally {
             setIsValuing(false);
         }
     };
@@ -401,17 +426,24 @@ export default function ResultsDashboard({ result, onReset, onEdit }: Props) {
                     </button>
                 </div>
 
+                {/* ── Valuation Loader (4-step animated pipeline) ── */}
+                {isValuing && (
+                    <ValuationLoader
+                        steps={valuationSteps || {}}
+                        onComplete={() => {/* result arrives via WS/polling */}}
+                    />
+                )}
+
                 {/* ── Valuation Button ── */}
-                {!isSetupOpen && !valuation && (
+                {!isSetupOpen && !valuation && !isValuing && (
                     <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                         <button
                             className="btn btn-primary"
                             style={{ background: '#1428A0', fontSize: '16px', padding: '14px 28px', width: '100%', maxWidth: '420px', display: 'flex', justifyContent: 'center', gap: '8px', borderRadius: '12px', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer', boxShadow: '0 2px 12px rgba(20,40,160,0.2)' }}
                             onClick={openSetup}
-                            disabled={isValuing}
                         >
                             <span>💰</span>
-                            {isValuing ? 'Vypracovávám odhad online...' : 'Vypracovat tržní odhad (porovnávací metoda)'}
+                            Vypracovat tržní odhad (porovnávací metoda)
                         </button>
                         {valError && <div style={{ color: '#ef4444', fontSize: '13px' }}>{valError}</div>}
                     </div>

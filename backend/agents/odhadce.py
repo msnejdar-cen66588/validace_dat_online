@@ -20,7 +20,7 @@ from config import UPLOAD_DIR
 
 # ── Povinné rozsahy koeficientů (sdílené mezi sanitize i compute) ─────────────
 COEFFICIENT_RANGES = {
-    "k1": (0.80, 0.90),   # Redukce pramene ceny (vždy ~0.85 for inzerce)
+    "k1": (0.85, 0.95),   # Redukce pramene ceny (vždy 0.90 pro inzerci)
     "k2": (0.50, 2.00),   # Velikost objektu
     "k3": (0.50, 2.00),   # Poloha
     "k4": (0.50, 2.00),   # Provedení / vybavení
@@ -105,7 +105,7 @@ Koeficienty vyjadřují poměr VZORKU k NAŠEMU domu:
 • K > 1.00 → vzorek je v této vlastnosti HORŠÍ než náš dům
 
 POVINNÉ ROZSAHY:
-• K1 (Redukce pramene ceny) = VŽDY 0.85 pro inzerátové ceny
+• K1 (Redukce pramene ceny) = VŽDY 0.90 pro inzerátové ceny
 • K2 (Velikost objektu):   0.50 – 2.00
 • K3 (Poloha):             0.50 – 2.00
 • K4 (Provedení/vybavení): 0.50 – 2.00
@@ -116,7 +116,7 @@ POVINNÉ ROZSAHY:
 • K7 (Úvaha znalce):       0.50 – 2.00
 • K8 (Energ. náročnost):   0.50 – 2.00
 
-⚠️ K1 musí být VŽDY 0.85! Toto je standardní redukce za inzerční cenu.
+⚠️ K1 musí být VŽDY 0.90! Toto je standardní redukce za inzerční cenu.
 
 ⚠️ NEPOČÍTEJ NHZP! Výpočet provede backend. Ty vrátíš POUZE koeficienty.
 
@@ -127,7 +127,7 @@ Vrať POUZE validní JSON (BEZ Markdown, BEZ ```json):
   "vzorky": [
     {
       "id": <id z vstupu>,
-      "koeficienty": {"k1": 0.85, "k2": ..., "k3": ..., "k4": ..., "k5": ..., "k6": ..., "k7": ..., "k8": ...},
+      "koeficienty": {"k1": 0.90, "k2": ..., "k3": ..., "k4": ..., "k5": ..., "k6": ..., "k7": ..., "k8": ...},
       "oduvodneni_koeficientu": "<stručné zdůvodnění pro každý K, který se liší od 1.00>"
     }
   ]
@@ -250,7 +250,7 @@ async def _fetch_apify_samples(
     lat: float | None,
     lon: float | None,
     floor_area_m2: int,
-    count: int = 20,
+    count: int = 12,
     category: str = "domy",
 ) -> list[dict]:
     """Načte reálné inzeráty ze sreality.cz přes Apify actor.
@@ -259,8 +259,11 @@ async def _fetch_apify_samples(
     včetně detailů (plocha, stav, rok stavby, obrázky, GPS).
     Volání je synchronní (actor.call čeká na dokončení), proto ho pouštíme přes
     asyncio.to_thread, aby neblokoval event loop.
+
+    ⚠️ count snížen na 12 (z 20) pro úsporu RAM na Render 512MB free tier.
     """
     import asyncio
+    import gc
 
     apify_token = os.environ.get("APIFY_API_TOKEN", "")
     if not apify_token:
@@ -285,18 +288,25 @@ async def _fetch_apify_samples(
             return []
         try:
             client = ApifyClient(token=apify_token)
-            run = client.actor("LozSX930wmiwBDeEl").call(run_input=input_config)
+            run = client.actor("LozSX930wmiwBDeEl").call(
+                run_input=input_config,
+                timeout_secs=120,  # Prevent hanging on slow runs
+            )
             dataset_id = run.get("defaultDatasetId")
             if not dataset_id:
                 print("Apify actor run finished but no dataset ID found")
                 return []
             items = list(client.dataset(dataset_id).iterate_items())
+            # Free client memory immediately
+            del client
             return items
         except Exception as e:
             print(f"Apify actor error: {e}")
             return []
 
+    gc.collect()  # Free memory before heavy Apify call
     raw_items = await asyncio.to_thread(_run_actor)
+    gc.collect()  # Free thread overhead
     if not raw_items:
         return []
 
@@ -392,8 +402,10 @@ async def _fetch_apify_samples(
     return results
 
 
-async def _download_image_bytes(url: str, max_bytes: int = 200_000) -> bytes | None:
-    """Download image from URL and return bytes (for AI). Limits size to save RAM."""
+async def _download_image_bytes(url: str, max_bytes: int = 120_000) -> bytes | None:
+    """Download image from URL and return bytes (for AI). Limits size to save RAM.
+    ⚠️ max_bytes snížen na 120KB (z 200KB) pro úsporu RAM na Render 512MB.
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Referer": "https://www.sreality.cz/",
@@ -488,7 +500,7 @@ class OdhadceAgent(BaseAgent):
         lat, lon = coords if coords else (None, None)
         try:
             raw_samples = await self._fetch_nearby_samples(
-                lat, lon, floor_area_int, district_id, total_count=20
+                lat, lon, floor_area_int, district_id, total_count=12
             )
         except Exception as e:
             self.log(f"Chyba při stahování vzorků: {e}", "error")
@@ -540,7 +552,7 @@ class OdhadceAgent(BaseAgent):
         photos_sent = 0
 
         contents_parts.append("=== FOTOGRAFIE OCEŇOVANÉHO DOMU ===\n")
-        for img_info in images_data[:4]:  # max 4 photos
+        for img_info in images_data[:2]:  # max 2 photos (reduced from 4 to save RAM on 512MB Render)
             img_path = img_info.get("processed_path", "")
             if img_path and os.path.exists(img_path):
                 try:
@@ -557,6 +569,7 @@ class OdhadceAgent(BaseAgent):
             self.log(f"Odesílám {photos_sent} fotek oceňované nemovitosti k analýze AI...", "info")
 
         # ── Stáhni fotky vzorků pro AI (sem=2 pro RAM) ──
+        # ⚠️ Sníženo z 5 na 3 vzorky s fotkami pro úsporu RAM na 512MB Render
         sample_photos_sent = 0
         contents_parts.append("\n=== FOTOGRAFIE VZORKŮ ZE SREALITY ===\n")
         sem_photo = asyncio.Semaphore(2)
@@ -573,7 +586,7 @@ class OdhadceAgent(BaseAgent):
                 except Exception:
                     return (s, None)
 
-        photo_results = await asyncio.gather(*[_dl_photo(s) for s in raw_samples[:5]])
+        photo_results = await asyncio.gather(*[_dl_photo(s) for s in raw_samples[:3]])
 
         for s, photo_data in photo_results:
             if isinstance(photo_data, bytes) and photo_data:
@@ -625,7 +638,7 @@ class OdhadceAgent(BaseAgent):
         prompt_text += (
             f"\nKandidáti ze sreality.cz (s detailními strukturovanými daty):\n{vzorky_text}\n\n"
             f"Vyber 5 nejpodobnějších vzorků a PŘIŘAĎ koeficienty K1–K8 dle instrukcí. "
-            f"K1 MUSÍ být 0.85 u všech vzorků. "
+            f"K1 MUSÍ být 0.90 u všech vzorků. "
             f"NEPOČÍTEJ NHZP – vrať POUZE koeficienty v JSON formátu."
         )
 
@@ -639,9 +652,13 @@ class OdhadceAgent(BaseAgent):
                 system_instruction=self.system_prompt,
                 contents=contents_parts,
                 response_mime_type="application/json",
-                max_output_tokens=8000,
+                max_output_tokens=4000,  # Reduced from 8000 – response is ~2KB JSON
                 temperature=0.3,
             )
+            # Free image bytes from memory immediately after LLM call
+            del contents_parts
+            import gc
+            gc.collect()
 
             result_json = robust_json_parse(response_text)
 
@@ -787,7 +804,7 @@ class OdhadceAgent(BaseAgent):
         """Sanitize coefficients to strict ranges (shared with frontend)."""
         sanitized = {}
         for k in ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"]:
-            raw = koef.get(k, 1.0 if k != "k1" else 0.85)
+            raw = koef.get(k, 1.0 if k != "k1" else 0.90)
             try:
                 val = float(str(raw).replace(",", "."))
                 # Guard against AI returning percentages (e.g. 85 instead of 0.85)
@@ -796,7 +813,7 @@ class OdhadceAgent(BaseAgent):
                 lo, hi = COEFFICIENT_RANGES.get(k, (0.80, 1.20))
                 val = max(lo, min(val, hi))
             except (ValueError, TypeError):
-                val = 0.85 if k == "k1" else 1.0
+                val = 0.90 if k == "k1" else 1.0
             sanitized[k] = round(val, 2)
         return sanitized
 
@@ -828,7 +845,7 @@ class OdhadceAgent(BaseAgent):
             io = 1.0
             koef = v.get("koeficienty") or {}
             for k in ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"]:
-                raw_k = koef.get(k, 1.0 if k != "k1" else 0.85)
+                raw_k = koef.get(k, 1.0 if k != "k1" else 0.90)
                 try:
                     num = float(str(raw_k).replace(",", "."))
                     if num > 5.0:
@@ -836,7 +853,7 @@ class OdhadceAgent(BaseAgent):
                     lo, hi = COEFFICIENT_RANGES.get(k, (0.80, 1.20))
                     num = max(lo, min(num, hi))
                 except (ValueError, TypeError):
-                    num = 0.85 if k == "k1" else 1.0
+                    num = 0.90 if k == "k1" else 1.0
                 io *= num
 
             upravene_jc_list.append(jc * io)

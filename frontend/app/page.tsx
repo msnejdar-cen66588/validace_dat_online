@@ -977,6 +977,9 @@ export default function Home() {
         <ResultsDashboard
           result={finalResult}
           onEdit={handleEdit}
+          valuationSteps={ws.valuationSteps}
+          valuationResult={ws.valuationResult}
+          isValuating={ws.isValuating}
           onReset={() => {
             setStep('upload');
             setFiles([]);
