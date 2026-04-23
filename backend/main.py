@@ -4,6 +4,7 @@ import uuid
 import json
 import gc
 import shutil
+import asyncio
 from typing import Optional
 
 import io
