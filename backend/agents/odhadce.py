@@ -271,10 +271,10 @@ async def _fetch_apify_samples(
         return []
 
     input_config = {
-        "portals": ["sreality"],
+        "portals": ["sreality", "bezrealitky"],
         "categories": [category],
         "offerType": ["prodej"],
-        "regions": [],           # Celá ČR – AI vybere nejrelevantnější
+        "regions": [],           # Celá ČR – filter by distance post-fetch
         "maxListings": count,
         "enableHistory": False,
     }
@@ -312,7 +312,7 @@ async def _fetch_apify_samples(
 
     results = []
     for i, item in enumerate(raw_items, 1):
-        # Map Apify output fields → internal structure
+        # ── Price ──
         price = 0
         price_raw = item.get("price")
         if isinstance(price_raw, (int, float)):
@@ -325,66 +325,76 @@ async def _fetch_apify_samples(
         if price <= 1:
             continue
 
-        # Size
+        # ── Floor area (Apify: "floorArea") ──
         size_m2 = 0
-        size_raw = item.get("size_m2") or item.get("usable_area")
+        size_raw = item.get("floorArea") or item.get("size_m2") or item.get("usable_area")
         if size_raw:
             try:
                 size_m2 = int(re.sub(r"[^\d]", "", str(size_raw)) or "0")
             except (ValueError, TypeError):
                 pass
-        # Fallback: parse from title
+        # Fallback: parse from name/title
         if not size_m2:
-            title = item.get("title") or ""
+            title = item.get("name") or item.get("title") or ""
             m2_matches = re.findall(r"(\d+)\s*m[²2]", title)
             if m2_matches:
                 size_m2 = int(m2_matches[0])
 
-        # Land area
+        # ── Land area (Apify: "landArea") ──
         land_m2 = 0
-        land_raw = item.get("land_area") or item.get("plot_area")
+        land_raw = item.get("landArea") or item.get("land_area") or item.get("plot_area")
         if land_raw:
             try:
                 land_m2 = int(re.sub(r"[^\d]", "", str(land_raw)) or "0")
             except (ValueError, TypeError):
                 pass
 
-        # Images
-        images = item.get("images") or []
-        obrazek_url = images[0] if images else None
+        # ── Image (Apify: "imageUrl" — single string) ──
+        obrazek_url = item.get("imageUrl") or None
+        if not obrazek_url:
+            images = item.get("images") or []
+            obrazek_url = images[0] if images else None
 
-        # GPS
-        gps_lat = item.get("GPS_lat") or item.get("gps_lat") or item.get("latitude")
-        gps_lon = item.get("GPS_lon") or item.get("gps_lon") or item.get("longitude")
+        # ── GPS (Apify: "lat" / "lon" at root level) ──
+        gps_lat = item.get("lat") or item.get("GPS_lat") or item.get("gps_lat") or item.get("latitude")
+        gps_lon = item.get("lon") or item.get("GPS_lon") or item.get("gps_lon") or item.get("longitude")
         try:
             gps_lat = float(gps_lat) if gps_lat else None
             gps_lon = float(gps_lon) if gps_lon else None
         except (ValueError, TypeError):
             gps_lat = gps_lon = None
 
-        # Distance
+        # ── Distance from property ──
         distance_km = None
         if lat and lon and gps_lat and gps_lon:
             distance_km = _haversine_km(lat, lon, gps_lat, gps_lon)
 
-        # Address
-        adresa = item.get("location") or item.get("address") or item.get("title") or ""
+        # ── Address (Apify: "locality") ──
+        adresa = item.get("locality") or item.get("location") or item.get("address") or item.get("name") or item.get("title") or ""
 
-        # Condition / details (Apify actor often includes these directly)
+        # ── Details ──
         stav = item.get("condition") or item.get("stav") or ""
         rok_stavby = str(item.get("year_built") or item.get("rok_stavby") or "")
-        typ_domu = item.get("building_type") or item.get("house_type") or item.get("typ_domu") or ""
+        typ_domu = item.get("building_type") or item.get("house_type") or item.get("layout") or ""
         pocet_podlazi = str(item.get("floors") or item.get("podlazi") or "")
 
-        # Source URL
+        # ── Source URL (Apify: "url" — functional sreality/bezrealitky link) ──
         zdroj_url = item.get("url") or item.get("link") or None
-        hash_id = item.get("hash_id") or item.get("id") or i
+        source = item.get("source") or ""
+        hash_id = item.get("id") or item.get("hash_id") or i
+
+        # ── Price per m² (Apify: "pricePerSqm") ──
+        price_per_m2 = item.get("pricePerSqm") or 0
+        if not price_per_m2 and size_m2 > 0:
+            price_per_m2 = round(price / size_m2)
 
         results.append({
             "id": i,
             "hash_id": hash_id,
+            "source": source,
             "adresa": adresa,
             "cena_czk": price,
+            "cena_za_m2": price_per_m2,
             "velikost_domu_m2": size_m2 if size_m2 > 0 else floor_area_m2,
             "velikost_pozemku_m2": land_m2,
             "stav": stav,
@@ -396,6 +406,11 @@ async def _fetch_apify_samples(
             "gps": {"lat": gps_lat, "lon": gps_lon} if gps_lat and gps_lon else None,
             "distance_km": round(distance_km, 1) if distance_km is not None else None,
         })
+
+    # Log summary for debugging
+    with_gps = sum(1 for r in results if r.get("gps"))
+    with_img = sum(1 for r in results if r.get("obrazek_url"))
+    print(f"[Apify] Mapped {len(results)} samples: {with_gps} with GPS, {with_img} with images")
 
     # Sort by distance (closest first) if we have coordinates
     results.sort(key=lambda x: x.get("distance_km") or 999)

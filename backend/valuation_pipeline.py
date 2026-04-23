@@ -239,51 +239,78 @@ class ValuationPipeline:
 
         floor_area_int = int(re.sub(r"[^0-9]", "", str(floor_area)) or "120") or 120
 
-        # Geocode
-        await self._notify_step("collector", "processing", "Geokóduji adresu...")
+        # ── Geocode property address ──
+        await self._notify_step("collector", "processing", "Geokóduji adresu nemovitosti...")
         coords = await _geocode_address(address)
         district_id = _find_district_id(address)
         lat, lon = coords if coords else (None, None)
+        print(f"[Valuation] Geocoded '{address}' → {coords}, district={district_id}")
 
-        # Fetch from Apify
+        # ── Fetch 20 samples from Apify (sreality + bezrealitky) ──
         await self._notify_step("collector", "processing",
-            "Stahuji vzorky z realitních portálů...")
-        raw_samples = await _fetch_apify_samples(lat, lon, floor_area_int, count=15)
+            "Stahuji 20 vzorků z realitních portálů (sreality + bezrealitky)...")
+        raw_samples = await _fetch_apify_samples(lat, lon, floor_area_int, count=20)
+        print(f"[Valuation] Apify returned {len(raw_samples)} raw samples")
 
-        # Filter invalid prices
+        # ── Filter invalid prices (unit price must be 10k–250k Kč/m²) ──
         valid = []
         for s in raw_samples:
             area = max(s.get("velikost_domu_m2") or floor_area_int, 10)
             jc = s["cena_czk"] / area
             if 10_000 <= jc <= 250_000:
                 valid.append(s)
+        print(f"[Valuation] After price filter: {len(valid)} samples (from {len(raw_samples)})")
         raw_samples = valid
 
-        # Fallback floor area
+        # ── Fallback floor area ──
         for s in raw_samples:
             if not s["velikost_domu_m2"] or s["velikost_domu_m2"] <= 0:
                 s["velikost_domu_m2"] = floor_area_int
 
-        # Geocode samples that lack GPS (so they appear on the map)
-        samples_needing_gps = [s for s in raw_samples if not s.get("gps")]
-        if samples_needing_gps:
+        # ── Filter by distance: prefer ≤2km, max 10km, fallback 25km ──
+        if lat and lon:
+            close_2km = [s for s in raw_samples if s.get("distance_km") is not None and s["distance_km"] <= 2]
+            close_10km = [s for s in raw_samples if s.get("distance_km") is not None and s["distance_km"] <= 10]
+            close_25km = [s for s in raw_samples if s.get("distance_km") is not None and s["distance_km"] <= 25]
+
+            if len(close_10km) >= 5:
+                raw_samples = close_10km
+                print(f"[Valuation] Distance filter: {len(raw_samples)} within 10km ({len(close_2km)} within 2km)")
+            elif len(close_25km) >= 3:
+                raw_samples = close_25km
+                print(f"[Valuation] Distance filter expanded to 25km: {len(raw_samples)} samples")
+            else:
+                print(f"[Valuation] WARNING: Only {len(close_25km)} samples within 25km, using all {len(raw_samples)}")
+
             await self._notify_step("collector", "processing",
-                f"Geokóduji {len(samples_needing_gps[:5])} vzorků bez GPS...")
-            for s in samples_needing_gps[:5]:  # max 5 to avoid rate limits
+                f"Nalezeno {len(raw_samples)} vzorků v okolí ({len(close_2km)} do 2km)")
+
+        # ── Geocode samples without GPS (max 5 to show on map) ──
+        samples_no_gps = [s for s in raw_samples if not s.get("gps")]
+        if samples_no_gps:
+            await self._notify_step("collector", "processing",
+                f"Geokóduji {min(len(samples_no_gps), 5)} vzorků bez GPS...")
+            for s in samples_no_gps[:5]:
                 try:
                     addr = s.get("adresa", "")
                     if addr:
-                        gc = await _geocode_address(addr)
-                        if gc:
-                            s["gps"] = {"lat": gc[0], "lon": gc[1]}
+                        sample_coords = await _geocode_address(addr)
+                        if sample_coords:
+                            s["gps"] = {"lat": sample_coords[0], "lon": sample_coords[1]}
                             if lat and lon:
-                                s["distance_km"] = round(_haversine_km(lat, lon, gc[0], gc[1]), 1)
+                                s["distance_km"] = round(_haversine_km(lat, lon, sample_coords[0], sample_coords[1]), 1)
                         await asyncio.sleep(1.1)  # Nominatim rate limit
                 except Exception:
                     pass
 
         if len(raw_samples) < 3:
-            return {"error": "Nedostatek srovnatelných vzorků na trhu (minimum 3)."}
+            return {"error": f"Nedostatek srovnatelných vzorků na trhu v okolí {address} (nalezeno {len(raw_samples)}, minimum 3)."}
+
+        # Re-sort by distance after geocoding
+        raw_samples.sort(key=lambda x: x.get("distance_km") or 999)
+
+        with_gps = sum(1 for s in raw_samples if s.get("gps"))
+        print(f"[Valuation] Final: {len(raw_samples)} samples, {with_gps} with GPS")
 
         return {
             "raw_samples": raw_samples,
@@ -417,16 +444,20 @@ class ValuationPipeline:
         await self._notify_step("coefficients", "processing",
             f"AI porovnává {prop_photos}+{sample_photos} fotek...")
 
-        # Text data for all 5 selected samples
+        # Text data for all selected samples – include distance and per-m² price
+        n_samples = len(step2["selected_samples"])
+        sample_ids = [s["id"] for s in step2["selected_samples"]]
         vzorky_text = json.dumps([{
             "id": s["id"],
             "adresa": s["adresa"],
             "cena_czk": s["cena_czk"],
+            "cena_za_m2": s.get("cena_za_m2") or (s["cena_czk"] // max(s.get("velikost_domu_m2", 1), 1)),
             "velikost_domu_m2": s["velikost_domu_m2"],
             "velikost_pozemku_m2": s.get("velikost_pozemku_m2", 0),
             "stav": s.get("stav") or "neznámý",
             "rok_stavby": s.get("rok_stavby") or "neznámý",
             "typ_domu": s.get("typ_domu") or "neznámý",
+            "distance_km": s.get("distance_km"),
         } for s in step2["selected_samples"]], ensure_ascii=False, indent=2)
 
         prompt = (
@@ -437,8 +468,10 @@ class ValuationPipeline:
             f"- Stav: {step1['condition']}\n"
             f"- Střecha: {step1['roof']}\n"
             f"- Vytápění: {step1['heating']}\n\n"
-            f"Vybrané vzorky ({len(step2['selected_samples'])} ks):\n{vzorky_text}\n\n"
-            f"Stanovi koeficienty K1–K8 pro KAŽDÝ vzorek. K1 MUSÍ být 0.90."
+            f"Vybrané vzorky ({n_samples} ks, ID: {sample_ids}):\n{vzorky_text}\n\n"
+            f"⚠️ POVINNÉ: Vrať koeficienty K1–K8 pro VŠECH {n_samples} vzorků (ID: {sample_ids}).\n"
+            f"⚠️ K1 = 0.90 u KAŽDÉHO vzorku. K2–K8 se MUSÍ lišit podle vlastností každého vzorku!\n"
+            f"⚠️ Pole 'vzorky' v odpovědi MUSÍ obsahovat přesně {n_samples} objektů!"
         )
         contents.append(prompt)
 
@@ -456,19 +489,29 @@ class ValuationPipeline:
 
             result = robust_json_parse(resp)
             ai_vzorky = result.get("vzorky", [])
+            print(f"[Valuation] AI returned coefficients for {len(ai_vzorky)} samples (expected {n_samples})")
             if not ai_vzorky:
                 return {"error": "AI nevrátila koeficienty."}
 
+            # Log each sample's coefficients
+            for v in ai_vzorky:
+                koef = v.get("koeficienty", {})
+                print(f"[Valuation]   Sample #{v.get('id')}: K1={koef.get('k1')}, K2={koef.get('k2')}, K3={koef.get('k3')}, K4={koef.get('k4')}, K5={koef.get('k5')}")
+
             # Ensure ALL samples have coefficients (fill missing with defaults)
             returned_ids = {v["id"] for v in ai_vzorky}
+            missing = 0
             for s in step2["selected_samples"]:
                 if s["id"] not in returned_ids:
+                    missing += 1
                     print(f"[Valuation] WARNING: AI skipped sample #{s['id']}, adding defaults")
                     ai_vzorky.append({
                         "id": s["id"],
                         "koeficienty": {"k1": 0.90, "k2": 1.0, "k3": 1.0, "k4": 1.0, "k5": 1.0, "k6": 1.0, "k7": 1.0, "k8": 1.0},
                         "oduvodneni_koeficientu": "Automatické výchozí hodnoty (AI nenastavila)"
                     })
+            if missing:
+                print(f"[Valuation] WARNING: {missing} samples filled with defaults!")
 
             return {"ai_vzorky": ai_vzorky}
         except Exception as e:
@@ -500,6 +543,7 @@ class ValuationPipeline:
                 io *= sanitized[k]
 
             upravene_jc_list.append(jc * io)
+            print(f"[Valuation] Sample #{s['id']}: JC={jc:.0f}, IO={io:.4f}, Adj.JC={jc*io:.0f} Kč/m² | K={list(sanitized.values())}")
 
             raw_img = s.get("obrazek_url")
             proxy_img = f"{backend_url}/api/proxy-image?url={raw_img}" if raw_img else None
@@ -533,6 +577,7 @@ class ValuationPipeline:
         nhzp_max = round(max(upravene_jc_list) * floor_area_int)
         # NHZP = exact midpoint of the range
         nhzp = round((nhzp_min + nhzp_max) / 2)
+        print(f"[Valuation] NHZP: {nhzp:,} Kč (range {nhzp_min:,}–{nhzp_max:,}), mean JC={mean_jc:.0f} Kč/m²")
 
         # Warnings
         warnings = []
