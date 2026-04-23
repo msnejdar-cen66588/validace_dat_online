@@ -131,6 +131,7 @@ function ValuationMap({ propertyGps, samples }: { propertyGps: { lat: number; lo
 
 export default function ResultsDashboard({ result, onReset, onEdit, valuationSteps, valuationResult, isValuating }: Props) {
     const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+    const [expandedCompRow, setExpandedCompRow] = useState<number | null>(null);
     const [valuation, setValuation] = useState<any>(null);
     const [isValuing, setIsValuing] = useState(false);
     const [isSetupOpen, setIsSetupOpen] = useState(false);
@@ -1514,21 +1515,47 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                                 ? '#fecaca'
                                                 : '#f1f5f9';
                                         const isLast = i === comparisonRows.length - 1;
+                                        const isExpanded = expandedCompRow === i;
+
+                                        // Extract short AI value from potentially long observed text
+                                        const extractShortValue = (text: string | null): string => {
+                                            if (!text) return 'Viz celkové shrnutí';
+                                            // If already short (<40 chars), use as-is
+                                            if (text.length <= 40) return text;
+                                            // Look for "Celkově:" summary
+                                            const celkoveMatch = text.match(/Celkov[ěé]:\s*(.+?)(?:\.|$)/i);
+                                            if (celkoveMatch) return celkoveMatch[1].trim();
+                                            // Look for "Závěr:" summary
+                                            const zaverMatch = text.match(/Záv[eě]r:\s*(.+?)(?:\.|$)/i);
+                                            if (zaverMatch) return zaverMatch[1].trim();
+                                            // Fallback: take text up to first period
+                                            const firstSentence = text.split('.')[0];
+                                            if (firstSentence.length <= 60) return firstSentence;
+                                            // Last fallback: truncate
+                                            return text.substring(0, 40) + '…';
+                                        };
+
+                                        const shortAiValue = extractShortValue(row.aiValue);
+                                        const hasDetail = (row.aiValue && row.aiValue.length > 40) || row.note;
+                                        const toggleExpand = () => setExpandedCompRow(isExpanded ? null : i);
 
                                         return (
-                                            <div key={i} className={row.note ? styles.compRowWrap : undefined}>
-                                                <div style={{
-                                                    display: 'grid', gridTemplateColumns: '180px 1fr 1fr 60px',
-                                                    padding: '12px 18px',
-                                                    background: bgColor,
-                                                    borderLeft: '1px solid #e8ecf1',
-                                                    borderRight: '1px solid #e8ecf1',
-                                                    borderBottom: `1px solid ${borderColor}`,
-                                                    borderRadius: isLast && !row.note ? '0 0 14px 14px' : undefined,
-                                                    alignItems: 'center',
-                                                    cursor: row.note ? 'default' : undefined,
-                                                    transition: 'background 0.2s ease',
-                                                }}>
+                                            <div key={i}>
+                                                <div
+                                                    style={{
+                                                        display: 'grid', gridTemplateColumns: '180px 1fr 1fr 60px',
+                                                        padding: '12px 18px',
+                                                        background: bgColor,
+                                                        borderLeft: '1px solid #e8ecf1',
+                                                        borderRight: '1px solid #e8ecf1',
+                                                        borderBottom: isExpanded ? 'none' : `1px solid ${borderColor}`,
+                                                        borderRadius: isLast && !isExpanded ? '0 0 14px 14px' : undefined,
+                                                        alignItems: 'center',
+                                                        cursor: hasDetail ? 'pointer' : undefined,
+                                                        transition: 'background 0.2s ease',
+                                                    }}
+                                                    onClick={hasDetail ? toggleExpand : undefined}
+                                                >
                                                     {/* Parameter name */}
                                                     <div style={{
                                                         fontWeight: 700, fontSize: '13px', color: '#0f172a',
@@ -1536,8 +1563,10 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                                         display: 'flex', alignItems: 'center', gap: '6px',
                                                     }}>
                                                         {row.label}
-                                                        {row.note && (
-                                                            <span className={styles.compRowChevron}>▾</span>
+                                                        {hasDetail && (
+                                                            <span className={styles.compRowChevron} style={{
+                                                                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                            }}>▾</span>
                                                         )}
                                                     </div>
 
@@ -1546,14 +1575,14 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                                         {row.formValue}
                                                     </div>
 
-                                                    {/* AI observation */}
+                                                    {/* AI observation — short value only */}
                                                     <div style={{
                                                         fontSize: '13px', fontWeight: 600,
                                                         color: row.match === false ? '#dc2626'
                                                             : row.aiValue ? '#0f172a' : '#94a3b8',
                                                         fontStyle: row.aiValue ? 'normal' : 'italic',
                                                     }}>
-                                                        {row.aiValue || 'Viz celkové shrnutí'}
+                                                        {shortAiValue}
                                                     </div>
 
                                                     {/* Match indicator */}
@@ -1570,16 +1599,23 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                                     </div>
                                                 </div>
 
-                                                {/* Note row — hidden, revealed on hover */}
-                                                {row.note && (
-                                                    <div className={styles.compRowNote} style={{
+                                                {/* Detail row — toggled on click */}
+                                                {hasDetail && (
+                                                    <div className={`${styles.compRowNote} ${isExpanded ? styles.compRowNoteOpen : ''}`} style={{
                                                         borderLeft: '1px solid #e8ecf1',
                                                         borderRight: '1px solid #e8ecf1',
                                                         borderBottom: `1px solid ${borderColor}`,
                                                         borderRadius: isLast ? '0 0 14px 14px' : undefined,
                                                     }}>
                                                         <div className={styles.compRowNoteInner}>
-                                                            💬 {row.note}
+                                                            {row.aiValue && row.aiValue.length > 40 && (
+                                                                <div style={{ marginBottom: row.note ? '8px' : 0 }}>
+                                                                    🤖 {renderWithLinks(row.aiValue)}
+                                                                </div>
+                                                            )}
+                                                            {row.note && (
+                                                                <div>💬 {row.note}</div>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 )}
