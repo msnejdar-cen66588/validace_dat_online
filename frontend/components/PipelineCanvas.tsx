@@ -146,49 +146,49 @@ export default function PipelineCanvas({
     };
 
     // Merge WS statuses with simulated ones — ENFORCE sequential visual order
+    // Guarantees exactly ONE agent always shows as "processing" during the run
     const getEffectiveStatus = (name: string, idx: number): string => {
         if (!started) return 'idle';
 
-        // Collect real WS statuses
-        const wsStatus = agentStatuses[name];
-        const isDone = (s: string) => ['success', 'fail', 'warn'].includes(s);
+        const isTerminal = (s: string) => ['success', 'fail', 'warn'].includes(s);
+        const hasAnyWs = Object.values(agentStatuses).some(s => s && s !== 'idle');
 
-        // Check if all PREVIOUS agents (by visual order) are done
-        const allPreviousDone = AGENTS_CONFIG.slice(0, idx).every((prev) => {
-            const prevWs = agentStatuses[prev.name];
-            // Count simulated-done agents too
-            if (prevWs && isDone(prevWs)) return true;
-            if (simulatedIdx >= 0 && AGENTS_CONFIG.findIndex(a => a.name === prev.name) < simulatedIdx) return true;
-            return false;
-        });
+        if (hasAnyWs) {
+            // ── Real WS data mode ──
+            // Find the first agent (by visual order) that does NOT have a terminal WS status
+            const firstNonTerminalIdx = AGENTS_CONFIG.findIndex(a => {
+                const s = agentStatuses[a.name];
+                return !s || !isTerminal(s);
+            });
 
-        // If this agent has a real terminal status and all previous are done → show it
-        if (wsStatus && isDone(wsStatus) && allPreviousDone) return wsStatus;
+            // All agents have terminal statuses → show real statuses
+            if (firstNonTerminalIdx === -1) {
+                return agentStatuses[name] || 'success';
+            }
 
-        // If this agent is processing but previous aren't all done → show as queued
-        if (wsStatus === 'processing' && !allPreviousDone) return 'queued';
+            // Agents before the "processing" slot: show their real terminal status
+            if (idx < firstNonTerminalIdx) {
+                const ws = agentStatuses[name];
+                return (ws && isTerminal(ws)) ? ws : 'success';
+            }
 
-        // If all previous are done and this agent has WS 'processing' → show it
-        if (wsStatus === 'processing' && allPreviousDone) return 'processing';
+            // The "processing" slot: ALWAYS show as processing (prevents "stuck" look)
+            if (idx === firstNonTerminalIdx) {
+                return 'processing';
+            }
 
-        // If all previous are done and this agent already finished (but out of order) → show done
-        if (wsStatus && isDone(wsStatus)) return wsStatus;
+            // Agents after: queued (even if they finished out of order on the backend)
+            return 'queued';
+        }
 
-        // Simulation fallback (when WS isn't delivering)
+        // ── Simulation fallback (no WS data yet) ──
         if (simulatedIdx >= 0) {
             if (idx < simulatedIdx) return 'success';
             if (idx === simulatedIdx) return 'processing';
             return 'queued';
         }
 
-        // Default: if all previous done and no WS status yet → this is the next "processing"
-        if (allPreviousDone && started && idx > 0) {
-            // Check if at least one agent has real WS data
-            const hasAnyWs = Object.values(agentStatuses).some(s => s && s !== 'idle');
-            if (hasAnyWs) return 'queued';
-        }
-
-        return wsStatus || 'idle';
+        return 'idle';
     };
 
     const completedCount = AGENTS_CONFIG.filter((a, i) => {

@@ -103,7 +103,7 @@ class InspektorAgent(BaseAgent):
                 system_instruction=self.system_prompt,
                 contents=parts,
                 response_mime_type="application/json",
-                max_output_tokens=1000,
+                max_output_tokens=3000,
             )
 
             ai_result = robust_json_parse(response_text)
