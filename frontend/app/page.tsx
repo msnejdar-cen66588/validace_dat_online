@@ -344,8 +344,7 @@ export default function Home() {
       >
         <div className={styles.modelSwitcherToggleLeft}>
           <span className={styles.modelSwitcherBadge}>AI</span>
-          <span className={styles.modelSwitcherToggleLabel}>Model:</span>
-          <span className={styles.modelSwitcherToggleValue}>{getModelDisplayName(selectedModel)}</span>
+          <span className={styles.modelSwitcherToggleValue}>Vyber LLM</span>
         </div>
         <span className={`${styles.modelSwitcherChevron} ${modelSelectorOpen ? styles.modelSwitcherChevronOpen : ''}`}>
           ▾
