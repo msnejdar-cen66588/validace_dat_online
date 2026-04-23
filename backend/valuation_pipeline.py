@@ -100,7 +100,11 @@ Vrať POUZE validní JSON:
       "oduvodneni_koeficientu": "<zdůvodnění pro každý K ≠ 1.00>"
     }
   ]
-}"""
+}
+
+⚠️ MUSÍŠ vrátit koeficienty pro KAŽDÝ vzorek! Pokud dostaneš 5 vzorků, vrať 5 objektů v poli "vzorky".
+Každý vzorek MUSÍ mít vlastní sadu K1–K8 – NEKOPÍRUJ koeficienty z jiného vzorku!
+⚠️ K1 = 0.90 u VŠECH vzorků, ale K2–K8 se MUSÍ lišit podle konkrétních vlastností každého vzorku."""
 
 
 class ValuationPipeline:
@@ -259,6 +263,24 @@ class ValuationPipeline:
         for s in raw_samples:
             if not s["velikost_domu_m2"] or s["velikost_domu_m2"] <= 0:
                 s["velikost_domu_m2"] = floor_area_int
+
+        # Geocode samples that lack GPS (so they appear on the map)
+        samples_needing_gps = [s for s in raw_samples if not s.get("gps")]
+        if samples_needing_gps:
+            await self._notify_step("collector", "processing",
+                f"Geokóduji {len(samples_needing_gps[:5])} vzorků bez GPS...")
+            for s in samples_needing_gps[:5]:  # max 5 to avoid rate limits
+                try:
+                    addr = s.get("adresa", "")
+                    if addr:
+                        gc = await _geocode_address(addr)
+                        if gc:
+                            s["gps"] = {"lat": gc[0], "lon": gc[1]}
+                            if lat and lon:
+                                s["distance_km"] = round(_haversine_km(lat, lon, gc[0], gc[1]), 1)
+                        await asyncio.sleep(1.1)  # Nominatim rate limit
+                except Exception:
+                    pass
 
         if len(raw_samples) < 3:
             return {"error": "Nedostatek srovnatelných vzorků na trhu (minimum 3)."}
@@ -437,6 +459,17 @@ class ValuationPipeline:
             if not ai_vzorky:
                 return {"error": "AI nevrátila koeficienty."}
 
+            # Ensure ALL samples have coefficients (fill missing with defaults)
+            returned_ids = {v["id"] for v in ai_vzorky}
+            for s in step2["selected_samples"]:
+                if s["id"] not in returned_ids:
+                    print(f"[Valuation] WARNING: AI skipped sample #{s['id']}, adding defaults")
+                    ai_vzorky.append({
+                        "id": s["id"],
+                        "koeficienty": {"k1": 0.90, "k2": 1.0, "k3": 1.0, "k4": 1.0, "k5": 1.0, "k6": 1.0, "k7": 1.0, "k8": 1.0},
+                        "oduvodneni_koeficientu": "Automatické výchozí hodnoty (AI nenastavila)"
+                    })
+
             return {"ai_vzorky": ai_vzorky}
         except Exception as e:
             return {"error": f"Chyba AI koeficientů: {e}"}
@@ -495,10 +528,11 @@ class ValuationPipeline:
             return self._fail_result("Žádné vzorky pro výpočet.", time.time())
 
         import statistics
-        median_jc = statistics.median(upravene_jc_list)
-        nhzp = round(median_jc * floor_area_int)
+        mean_jc = statistics.mean(upravene_jc_list)
         nhzp_min = round(min(upravene_jc_list) * floor_area_int)
         nhzp_max = round(max(upravene_jc_list) * floor_area_int)
+        # NHZP = exact midpoint of the range
+        nhzp = round((nhzp_min + nhzp_max) / 2)
 
         # Warnings
         warnings = []
