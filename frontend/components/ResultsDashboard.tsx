@@ -438,8 +438,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                 {!isSetupOpen && !valuation && !isValuing && (
                     <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                         <button
-                            className="btn btn-primary"
-                            style={{ background: '#1428A0', fontSize: '16px', padding: '14px 28px', width: '100%', maxWidth: '420px', display: 'flex', justifyContent: 'center', gap: '8px', borderRadius: '12px', border: 'none', color: '#fff', fontWeight: 700, cursor: 'pointer', boxShadow: '0 2px 12px rgba(20,40,160,0.2)' }}
+                            className={styles.valuationBtn}
                             onClick={openSetup}
                         >
                             <span>💰</span>

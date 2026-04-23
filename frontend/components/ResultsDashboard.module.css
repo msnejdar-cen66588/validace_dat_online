@@ -570,26 +570,31 @@
 
 /* ── Download Button ── */
 .downloadBtn {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 10px;
-    padding: 14px 28px;
-    background: #1428A0;
-    color: #ffffff;
-    border: none;
-    border-radius: 12px;
-    font-size: 15px;
-    font-weight: 700;
+    padding: 12px 28px;
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--accent-blue, #2870ED);
+    border: 1px solid rgba(40, 112, 237, 0.15);
+    border-radius: var(--radius-pill, 128px);
+    font-size: 14px;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 12px rgba(20, 40, 160, 0.2);
-    letter-spacing: 0.2px;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 1px 4px rgba(11, 31, 66, 0.04), 0 4px 16px rgba(40, 112, 237, 0.06);
+    letter-spacing: 0.1px;
+    font-family: inherit;
 }
 
 .downloadBtn:hover {
-    background: #0e1e7a;
+    background: var(--accent-blue, #2870ED);
+    color: #ffffff;
+    border-color: var(--accent-blue, #2870ED);
     transform: translateY(-2px);
-    box-shadow: 0 6px 24px rgba(20, 40, 160, 0.28);
+    box-shadow: 0 4px 20px rgba(40, 112, 237, 0.25), 0 8px 32px rgba(40, 112, 237, 0.12);
 }
 
 .downloadBtn:active {
@@ -597,10 +602,42 @@
 }
 
 .downloadBtn:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+}
+
+/* ── Valuation Button ── */
+.valuationBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    max-width: 420px;
+    padding: 16px 32px;
+    background: linear-gradient(135deg, var(--accent-blue, #2870ED) 0%, var(--accent-blue-hover, #1A5FD9) 100%);
+    color: #ffffff;
+    border: none;
+    border-radius: var(--radius-pill, 128px);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 4px 16px rgba(40, 112, 237, 0.25), 0 1px 3px rgba(40, 112, 237, 0.1);
+    letter-spacing: -0.1px;
+    font-family: inherit;
+}
+
+.valuationBtn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 28px rgba(40, 112, 237, 0.35), 0 2px 6px rgba(40, 112, 237, 0.15);
+    background: linear-gradient(135deg, #3580FF 0%, var(--accent-blue, #2870ED) 100%);
+}
+
+.valuationBtn:active {
+    transform: translateY(0);
 }
 
 /* ── Tech Data Summary ── */
