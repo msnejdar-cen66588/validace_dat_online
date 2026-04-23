@@ -109,17 +109,27 @@ class ValuationPipeline:
     def __init__(self, session_id: str, model_name: str = "gemini"):
         self.session_id = session_id
         self.model_name = model_name
-        self.connections: list[WebSocket] = []
         self.current_step = 0
 
+    def _get_connections(self) -> list[WebSocket]:
+        """Dynamically look up WS connections from global registry."""
+        try:
+            from main import global_websockets
+            return global_websockets.get(self.session_id, [])
+        except Exception:
+            return []
+
     async def broadcast(self, message: dict):
-        for ws in self.connections:
+        connections = self._get_connections()
+        print(f"[Valuation] Broadcasting {message.get('type', '?')} to {len(connections)} WS connections")
+        for ws in connections:
             try:
                 await ws.send_json(message)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[Valuation] WS send error: {e}")
 
     async def _notify_step(self, step_key: str, status: str, message: str = ""):
+        print(f"[Valuation] Step {step_key} → {status}: {message}")
         await self.broadcast({
             "type": "valuation_step",
             "session_id": self.session_id,
@@ -132,6 +142,7 @@ class ValuationPipeline:
     async def run(self, context: dict) -> dict:
         """Run the full 4-step valuation pipeline."""
         start_time = time.time()
+        print(f"[Valuation] Pipeline starting for session {self.session_id}, model={self.model_name}")
 
         await self.broadcast({
             "type": "valuation_start",
@@ -142,41 +153,56 @@ class ValuationPipeline:
 
         try:
             # ── Step 1: Collect Samples ──
+            print("[Valuation] === Step 1: Collect Samples ===")
             await self._notify_step("collector", "processing", "Geokóduji adresu...")
             step1 = await self._step_collect(context)
             gc.collect()
             if step1.get("error"):
+                print(f"[Valuation] Step 1 FAILED: {step1['error']}")
+                await self._notify_step("collector", "fail", step1["error"])
                 return self._fail_result(step1["error"], start_time)
+            print(f"[Valuation] Step 1 OK: {len(step1['raw_samples'])} samples")
             await self._notify_step("collector", "success",
                 f"Nalezeno {len(step1['raw_samples'])} kandidátů")
 
             # ── Step 2: Analyze & Select Samples ──
+            print("[Valuation] === Step 2: Analyze Samples ===")
             await self._notify_step("analyst", "processing", "AI analyzuje kandidáty...")
             step2 = await self._step_analyze(context, step1)
             gc.collect()
             if step2.get("error"):
+                print(f"[Valuation] Step 2 FAILED: {step2['error']}")
+                await self._notify_step("analyst", "fail", step2["error"])
                 return self._fail_result(step2["error"], start_time)
+            print(f"[Valuation] Step 2 OK: {len(step2['selected_samples'])} selected")
             await self._notify_step("analyst", "success",
                 f"Vybráno {len(step2['selected_samples'])} nejpodobnějších vzorků")
 
             # ── Step 3: Compute Coefficients ──
+            print("[Valuation] === Step 3: Compute Coefficients ===")
             await self._notify_step("coefficients", "processing",
                 "AI porovnává fotografie a stanovuje koeficienty...")
             step3 = await self._step_coefficients(context, step1, step2)
             gc.collect()
             if step3.get("error"):
+                print(f"[Valuation] Step 3 FAILED: {step3['error']}")
+                await self._notify_step("coefficients", "fail", step3["error"])
                 return self._fail_result(step3["error"], start_time)
+            print(f"[Valuation] Step 3 OK: {len(step3.get('ai_vzorky', []))} vzorky with coefficients")
             await self._notify_step("coefficients", "success",
                 "Koeficienty K1–K8 stanoveny pro všechny vzorky")
 
             # ── Step 4: Calculate NHZP ──
+            print("[Valuation] === Step 4: Calculate NHZP ===")
             await self._notify_step("calculator", "processing", "Počítám NHZP...")
             result = self._step_calculate(context, step1, step2, step3)
+            print(f"[Valuation] Step 4 OK: NHZP = {result.get('details', {}).get('odhad_czk', '?')}")
             await self._notify_step("calculator", "success",
                 f"Odhad: {result['details']['odhad_czk']/1e6:.2f} mil. Kč")
 
             total_time = round(time.time() - start_time, 2)
             result["details"]["total_time"] = total_time
+            print(f"[Valuation] Pipeline COMPLETE in {total_time}s")
 
             await self.broadcast({
                 "type": "valuation_complete",
@@ -189,6 +215,7 @@ class ValuationPipeline:
 
         except Exception as e:
             import traceback
+            print(f"[Valuation] Pipeline EXCEPTION: {e}")
             traceback.print_exc()
             return self._fail_result(str(e), start_time)
 

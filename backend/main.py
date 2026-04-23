@@ -506,8 +506,6 @@ async def generate_valuation(
     }
 
     pipeline = ValuationPipeline(session_id=session_id, model_name=effective_model)
-    # Attach existing WebSocket connections for real-time updates
-    pipeline.connections = global_websockets.get(session_id, [])
 
     async def _run_valuation():
         try:
