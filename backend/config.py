@@ -6,7 +6,7 @@ load_dotenv()
 
 # Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 # OpenAI (standard API – set OPENAI_API_KEY env var on Render)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

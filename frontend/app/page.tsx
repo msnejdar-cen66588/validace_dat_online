@@ -73,7 +73,7 @@ export default function Home() {
   const [lvData, setLvData] = useState<LVData | null>(null);
   const [lvParsing, setLvParsing] = useState(false);
   const [selectedParcels, setSelectedParcels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("gemini");
+  const [selectedModel, setSelectedModel] = useState<string>("gemini-3-flash-preview");
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const [pipelineStarted, setPipelineStarted] = useState(false);
   const lvInputRef = useRef<HTMLInputElement>(null);
@@ -311,7 +311,8 @@ export default function Home() {
       name: 'Google',
       icon: '🔵',
       models: [
-        { id: 'gemini', name: 'Gemini 2.5 Flash', desc: 'Multimodální model Google' },
+        { id: 'gemini-3-flash-preview', name: 'Gemini 3.1 Flash', desc: 'Rychlý a cenově efektivní' },
+        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', desc: 'Vlajkový model pro reasoning' },
       ],
     },
     {

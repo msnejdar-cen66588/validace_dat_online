@@ -375,7 +375,7 @@ async def start_pipeline(
     session_id: str,
     background_tasks: BackgroundTasks,
     custom_prompts: Optional[dict] = None,
-    model: str = "gemini"
+    model: str = "gemini-3-flash-preview"
 ):
     """Starts the validation pipeline in the background."""
     if session_id not in sessions:
@@ -485,7 +485,7 @@ async def generate_valuation(
     gc.collect()
 
     session = sessions.get(session_id, {})
-    effective_model = model or session.get("model") or "gemini"
+    effective_model = model or session.get("model") or "gemini-3-flash-preview"
 
     custom_address = payload.get("adresa") if payload else None
     custom_area = payload.get("plocha") if payload else None
