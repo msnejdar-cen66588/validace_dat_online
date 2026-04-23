@@ -474,11 +474,10 @@ async def get_pipeline_state(session_id: str):
 @app.post("/api/pipeline/valuation/{session_id}")
 async def generate_valuation(
     session_id: str,
-    background_tasks: BackgroundTasks,
     payload: dict = Body(None),
     model: str = None
 ):
-    """Run 4-step valuation pipeline as background task with WS updates."""
+    """Run 4-step valuation pipeline as async task with WS updates."""
     from valuation_pipeline import ValuationPipeline
 
     _evict_old_sessions(keep_id=session_id)
@@ -505,7 +504,11 @@ async def generate_valuation(
         }
     }
 
-    pipeline = ValuationPipeline(session_id=session_id, model_name=effective_model)
+    pipeline = ValuationPipeline(
+        session_id=session_id,
+        model_name=effective_model,
+        ws_registry=global_websockets,  # pass reference directly
+    )
 
     async def _run_valuation():
         try:
@@ -513,12 +516,14 @@ async def generate_valuation(
             if session_id in sessions:
                 sessions[session_id]["valuation"] = result
         except Exception as e:
-            print(f"Valuation pipeline error: {e}")
+            import traceback
+            print(f"[Valuation] Background task error: {e}")
+            traceback.print_exc()
         finally:
-            del pipeline
             gc.collect()
 
-    background_tasks.add_task(_run_valuation)
+    # Use asyncio.create_task so it shares the event loop with WebSockets
+    asyncio.create_task(_run_valuation())
 
     return {"status": "started", "message": "Valuation pipeline started. Watch WebSocket for updates."}
 

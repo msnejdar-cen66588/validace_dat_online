@@ -106,18 +106,15 @@ Vrať POUZE validní JSON:
 class ValuationPipeline:
     """Orchestrates 4-step valuation with WebSocket progress updates."""
 
-    def __init__(self, session_id: str, model_name: str = "gemini"):
+    def __init__(self, session_id: str, model_name: str = "gemini", ws_registry: dict = None):
         self.session_id = session_id
         self.model_name = model_name
+        self.ws_registry = ws_registry or {}
         self.current_step = 0
 
     def _get_connections(self) -> list[WebSocket]:
-        """Dynamically look up WS connections from global registry."""
-        try:
-            from main import global_websockets
-            return global_websockets.get(self.session_id, [])
-        except Exception:
-            return []
+        """Look up WS connections from registry."""
+        return self.ws_registry.get(self.session_id, [])
 
     async def broadcast(self, message: dict):
         connections = self._get_connections()
