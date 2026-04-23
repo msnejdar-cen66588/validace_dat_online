@@ -73,7 +73,8 @@ export default function Home() {
   const [lvData, setLvData] = useState<LVData | null>(null);
   const [lvParsing, setLvParsing] = useState(false);
   const [selectedParcels, setSelectedParcels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("gpt-5.4-mini");
+  const [selectedModel, setSelectedModel] = useState<string>("gemini");
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const [pipelineStarted, setPipelineStarted] = useState(false);
   const lvInputRef = useRef<HTMLInputElement>(null);
 
@@ -304,49 +305,78 @@ export default function Home() {
     }
   };
 
+  const MODEL_PROVIDERS = [
+    {
+      id: 'google',
+      name: 'Google',
+      icon: '🔵',
+      models: [
+        { id: 'gemini', name: 'Gemini 2.5 Flash', desc: 'Multimodální model Google' },
+      ],
+    },
+    {
+      id: 'openai',
+      name: 'OpenAI',
+      icon: '🟢',
+      models: [
+        { id: 'gpt-5.4', name: 'GPT-5.4', desc: 'Nejnovější vlajkový model OpenAI' },
+        { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', desc: 'Rychlý a cenově efektivní' },
+        { id: 'gpt-4.1', name: 'GPT-4.1', desc: 'Vyvážený výkon a cena' },
+        { id: 'o4-mini', name: 'o4-mini', desc: 'Reasoning model pro analytiku' },
+      ],
+    },
+  ];
+
+  const getModelDisplayName = (modelId: string) => {
+    for (const provider of MODEL_PROVIDERS) {
+      const model = provider.models.find(m => m.id === modelId);
+      if (model) return `${provider.icon} ${model.name}`;
+    }
+    return modelId;
+  };
+
   const renderModelSelection = () => (
     <div className={styles.modelSwitcher}>
-      <h3 className={styles.modelSwitcherTitle}>
-        <span className={styles.modelSwitcherBadge}>AI</span>
-        Výběr AI modelu
-      </h3>
-      <div className={styles.modelGrid}>
-        <button
-          onClick={() => setSelectedModel("gpt-5.4")}
-          className={`${styles.modelOption} ${selectedModel === "gpt-5.4" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>GPT-5.4</span>
-          <span className={styles.modelDesc}>Nejnovější vlajkový model OpenAI</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("gpt-5.4-mini")}
-          className={`${styles.modelOption} ${selectedModel === "gpt-5.4-mini" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>GPT-5.4 mini</span>
-          <span className={styles.modelDesc}>Rychlý a cenově efektivní</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("gpt-4.1")}
-          className={`${styles.modelOption} ${selectedModel === "gpt-4.1" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>GPT-4.1</span>
-          <span className={styles.modelDesc}>Vyvážený výkon a cena</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("o4-mini")}
-          className={`${styles.modelOption} ${selectedModel === "o4-mini" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>o4-mini</span>
-          <span className={styles.modelDesc}>Reasoning model pro analytiku</span>
-        </button>
-        <button
-          onClick={() => setSelectedModel("gemini")}
-          className={`${styles.modelOption} ${selectedModel === "gemini" ? styles.modelOptionActive : ""}`}
-        >
-          <span className={styles.modelName}>Google Gemini</span>
-          <span className={styles.modelDesc}>Multimodální model Google</span>
-        </button>
-      </div>
+      {/* Compact collapsed bar */}
+      <button
+        className={styles.modelSwitcherToggle}
+        onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
+      >
+        <div className={styles.modelSwitcherToggleLeft}>
+          <span className={styles.modelSwitcherBadge}>AI</span>
+          <span className={styles.modelSwitcherToggleLabel}>Model:</span>
+          <span className={styles.modelSwitcherToggleValue}>{getModelDisplayName(selectedModel)}</span>
+        </div>
+        <span className={`${styles.modelSwitcherChevron} ${modelSelectorOpen ? styles.modelSwitcherChevronOpen : ''}`}>
+          ▾
+        </span>
+      </button>
+
+      {/* Expandable model list */}
+      {modelSelectorOpen && (
+        <div className={styles.modelSelectorPanel}>
+          {MODEL_PROVIDERS.map(provider => (
+            <div key={provider.id} className={styles.modelProviderGroup}>
+              <div className={styles.modelProviderHeader}>
+                <span className={styles.modelProviderIcon}>{provider.icon}</span>
+                {provider.name}
+              </div>
+              <div className={styles.modelProviderModels}>
+                {provider.models.map(model => (
+                  <button
+                    key={model.id}
+                    onClick={() => { setSelectedModel(model.id); setModelSelectorOpen(false); }}
+                    className={`${styles.modelOption} ${selectedModel === model.id ? styles.modelOptionActive : ''}`}
+                  >
+                    <span className={styles.modelName}>{model.name}</span>
+                    <span className={styles.modelDesc}>{model.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 
