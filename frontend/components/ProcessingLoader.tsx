@@ -125,10 +125,7 @@ export default function ProcessingLoader({ phase }: Props) {
                     </svg>
                   )}
                 </div>
-                {/* Accordion detail */}
-                <div className={styles.stepDetail}>
-                  {step.desc}
-                </div>
+
               </div>
             );
           })}
