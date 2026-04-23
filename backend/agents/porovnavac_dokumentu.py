@@ -44,10 +44,22 @@ Pokud JAKÁKOLIV z těchto 3 podmínek NENÍ splněna → podkroví NEPOTVRZUJ, 
   ❌ NÍZKÝ STROP ≠ ŠIKMÝ STROP: Některé domy mají v horním patře nižší stropy, ale rovné. To NENÍ podkroví.
 
 - POČÍTÁNÍ ZVENKU:
-  - 1 řada normálních oken = 1. nadzemní podlaží (1NP, přízemí).
-  - 2 řady nad sebou = 1NP + 2NP (plné patro bez šikmin).
+  - 1 řada normálních oken v plné stěně = 1. nadzemní podlaží (1NP, přízemí).
+  - 2 řady nad sebou v plných rovných stěnách = 1NP + 2NP.
   - Okna ve štítu nebo ve střeše = obytné podkroví (pouze pokud splňuje 3-bodový test).
   - Okna nízko u země = suterén/sklep.
+
+⚠️ KRITICKÉ PRAVIDLO – NEPOČÍTEJ PODKROVÍ DVAKRÁT:
+  Pokud jsou okna nebo balkón umístěny UVNITŘ střešního trojúhelníku (ve štítu), jde o PODKROVÍ, nikoliv o plné nadzemní podlaží!
+  - Balkón ve štítu + šikmá střecha nad ním = podkroví, NE 2NP.
+  - Plné 2NP = okna jsou v ROVNÉ SVISLÉ stěně pod okapem, ne ve štítu.
+  
+  PŘÍKLADY:
+  - Dům se sedlovou střechou, přízemní okna + balkón/okna ve štítové části = 1NP + podkroví = **2 obytné úrovně**
+  - Dům s rovnou stěnou do výšky okapu, 2 řady oken v rovných stěnách = 1NP + 2NP = **2 obytná podlaží** (bez podkroví)
+  - Dům 2 řady oken v rovných stěnách + navíc střešní okna = 1NP + 2NP + podkroví = **3 obytné úrovně** (ale toto je vzácné!)
+
+  ZLATÉ PRAVIDLO: Celkový počet obytných úrovní = plná NP + podkroví (0 nebo 1). Podkroví NAHRAZUJE plné patro, nikdy se k němu nepřičítá, pokud okna/balkón jsou ve štítové části střechy.
 
 ═══════════════════════════════════════════════════════════════
 2. **PROFESIONÁLNÍ ODHAD PODLAHOVÉ PLOCHY (m²)**
