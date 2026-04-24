@@ -18,38 +18,28 @@ const AGENTS: AgentInfo[] = [
         name: 'Strazce',
         icon: '🛡️',
         color: '#2870ED',
-        description: 'Agent 1 – Kontrola úplnosti fotodokumentace (BR-G4). Klasifikuje každou fotku do kategorií, ověřuje přítomnost povinných pohledů (exteriér ze všech stran, interiér všech místností, vedlejší stavby) a aktuálnost fotek. Minimální počet fotek: 5 (ideálně ~9).',
-        inputs: 'Seznam obrázků (JPEG bytes, max 3000 tokenů). Žádná jiná data z formuláře.',
-        outputs: 'classifications[] → pro každou fotku seznam kategorií a popis. summary → počty ext/int, has_cislo_popisne, has_front/rear/side, interior_rooms_found[], vedlejsi_stavba_visible.',
-        thresholds: 'FAIL: exteriér < 2 fotek, chybí přední pohled, interiér < 3 fotek. WARN: chybí ČP, chybí zadní/boční, chybí místnosti (kuchyň/koupelna/obývák), vedlejší stavba bez fotky. SUCCESS: vše splněno.',
+        description: 'Agent 1 – Kontrola úplnosti fotodokumentace (BR-G4). Klasifikuje každou fotku do 17 kategorií (EXTERIER_PREDNI, INTERIER_KUCHYN atd.), ověřuje přítomnost povinných pohledů a aktuálnost EXIF metadat (max 90 dní). Rozlišuje podkroví vs. plné patro pomocí pravidel pro širokoúhlý objektiv.',
+        inputs: 'Seznam obrázků (JPEG bytes). EXIF metadata (datum, GPS, model zařízení) pro validaci stáří.',
+        outputs: 'classifications[] → pro každou fotku seznam kategorií a popis. summary → počty ext/int, has_cislo_popisne, has_front/rear/side, interior_rooms_found[], vedlejsi_stavba_visible. image_metadata{} s GPS a daty.',
+        thresholds: 'FAIL: exteriér < 2 fotek, chybí přední pohled, interiér < 3 fotek. WARN: chybí ČP, chybí zadní/boční, chybí místnosti (kuchyň/koupelna/obývák), vedlejší stavba nezdokumentována, EXIF starší 90 dní. SUCCESS: vše splněno.',
         prompt: `Jsi expert na validaci fotografické dokumentace nemovitostí typu Rodinný dům (RD) pro účely bankovního ocenění.
 
 POVINNÁ FOTODOKUMENTACE:
 1) Aktuální barevné fotografie:
-   a) EXTERIÉR — pohled na dům ze všech světových stran (přední, zadní, boční), pokud je to možné.
+   a) EXTERIÉR — pohled na dům ze všech světových stran (přední, zadní, boční).
       Na alespoň jedné fotce musí být viditelné číslo popisné (CP).
-   b) INTERIÉR — fotografie všech místností:
-      - kuchyň, obývací pokoj, ložnice, koupelna, WC, chodba, schodiště, sklep, podkroví a další
-   c) VEDLEJŠÍ STAVBY — garáž, stodola, dílna, kůlna apod.
-      Vedlejší stavby se fotí POUZE pokud na pozemku existují.
+   b) INTERIÉR — fotografie všech místností
+   c) VEDLEJŠÍ STAVBY — POUZE pokud na pozemku existují.
 
 KATEGORIE PRO KLASIFIKACI:
-- EXTERIER_PREDNI: Přední pohled na dům (fasáda, vchod), ideálně s číslem popisným
-- EXTERIER_ZADNI: Zadní pohled na dům (ze zahrady/dvora)
-- EXTERIER_BOCNI: Boční pohled na dům
-- EXTERIER_DETAIL: Detail exteriéru (střecha, okna, fasáda zblízka, sokl)
-- EXTERIER_CISLO_POPISNE: Fotografie s viditelným číslem popisným na domě
-- INTERIER_KUCHYN: Kuchyň nebo kuchyňský kout
-- INTERIER_OBYVAK: Obývací pokoj
-- INTERIER_LOZNICE: Ložnice / dětský pokoj
-- INTERIER_KOUPELNA: Koupelna / WC
-- INTERIER_CHODBA: Chodba, schodiště, vstupní hala
-- INTERIER_SKLEP: Sklep, suterén
-- INTERIER_PODKROVI: Podkroví, půdní prostor
-- INTERIER_OSTATNI: Jiné interiérové prostory
-- VEDLEJSI_STAVBA: Vedlejší stavba — garáž, stodola, dílna, kůlna
-- OKOLI: Zahrada, příjezdová cesta, okolí domu
-- PUDORYS: Půdorys, technický výkres
+EXTERIER_PREDNI, EXTERIER_ZADNI, EXTERIER_BOCNI, EXTERIER_DETAIL,
+EXTERIER_CISLO_POPISNE, INTERIER_KUCHYN, INTERIER_OBYVAK, INTERIER_LOZNICE,
+INTERIER_KOUPELNA, INTERIER_CHODBA, INTERIER_SKLEP, INTERIER_PODKROVI,
+INTERIER_OSTATNI, VEDLEJSI_STAVBA, OKOLI, PUDORYS
+
+POZN.: INTERIER_PODKROVI — klasifikuj POUZE pokud na fotce vidíš skutečně
+šikmé/zkosené stropy sledující tvar střechy. POZOR: širokoúhlý objektiv
+deformuje okraje fotky → to NENÍ podkroví!
 
 Odpověz POUZE validním JSON.`,
     },
@@ -57,25 +47,21 @@ Odpověz POUZE validním JSON.`,
         name: 'ForenzniAnalytik',
         icon: '🔬',
         color: '#dc2626',
-        description: 'Agent 2 – Detekce manipulace fotografií (BR-G5). Analýza AI generování, retušování, klonování, nekonzistentního šumu, stažení z internetu (Google Cloud Vision web detection), nesouladu EXIF metadat.',
-        inputs: 'Obrázky + EXIF metadata (datum, GPS, model zařízení). Volitelně Google Cloud Vision web detection přes service account credentials.',
-        outputs: 'photos[] → pro každou fotku: manipulation_score (0.0–1.0), confidence (0.0–1.0), is_ai_generated, is_downloaded_from_internet, findings[], risk_level (low/medium/high/critical). overall → avg/max score, flagged_count, summary.',
-        thresholds: 'FAIL: manipulation_score ≥ 0.7 AND confidence ≥ 0.6 (konfigurovatelné v config.py), nebo fotka nalezena na blocked domains (sreality.cz apod.) → score=1.0 automaticky. WARN: score ≥ 0.4. SUCCESS: vše pod prahem.',
-        prompt: `Jsi forenzní expert na analýzu fotografií nemovitostí. Tvým úkolem je detekovat jakékoliv manipulace, AI úpravy, retuše nebo nesrovnalosti.
+        description: 'Agent 2 – Detekce manipulace fotografií (BR-G5). AI analýza generování, retušování, klonování + Google Cloud Vision Web Detection pro odhalení fotek stažených z internetu (sreality.cz, bezrealitky.cz atd.). Fotka nalezená na blocked domain = automatický score 1.0.',
+        inputs: 'Obrázky + EXIF metadata. Google Cloud Vision (service account credentials) pro web detection.',
+        outputs: 'photos[] → manipulation_score (0.0–1.0), confidence, is_ai_generated, is_downloaded_from_internet, findings[], risk_level. overall → avg/max score, flagged_count.',
+        thresholds: 'FAIL: manipulation_score ≥ 0.7 AND confidence ≥ 0.6, nebo fotka nalezena na blocked domains → score=1.0. WARN: score ≥ 0.4. SUCCESS: vše pod prahem.',
+        prompt: `Jsi forenzní expert na analýzu fotografií nemovitostí. Detekuj manipulace, AI úpravy, retuše.
 
-ANALYZUJ KAŽDOU FOTOGRAFII NA:
-1. AI Generování: podivné textury, nereálné odrazy, anomálie v detailech
+ANALYZUJ NA:
+1. AI Generování: podivné textury, nereálné odrazy
 2. Retuše a Úpravy: klonování, healing, content-aware fill
-3. Lokální Artefakty: skoky v kompresi, nekonzistentní šum, blur/sharpen anomálie
-4. Metadata Nesoulad: nesoulad mezi vizuálním obsahem a metadaty
-5. Manipulace Perspektivy: zkreslení, nereálné úhly
+3. Lokální Artefakty: skoky v kompresi, nekonzistentní šum
+4. Metadata Nesoulad: osvětlení vs. čas pořízení
+5. Manipulace Perspektivy: nereálné úhly
 6. Původ Fotografie: vodoznaky, loga portálů (zejména sreality.cz)
 
-PRO KAŽDOU FOTOGRAFII VRAŤ:
-- manipulation_score: 0.0-1.0
-- confidence: 0.0-1.0
-- findings: seznam nalezených problémů
-- risk_level: "low" (<0.3) | "medium" (0.3-0.6) | "high" (0.6-0.8) | "critical" (>0.8)
+risk_level: "low" (<0.3), "medium" (0.3-0.6), "high" (0.6-0.8), "critical" (>0.8)
 
 Odpověz POUZE validním JSON.`,
     },
@@ -83,193 +69,152 @@ Odpověz POUZE validním JSON.`,
         name: 'Historik',
         icon: '📅',
         color: '#92400e',
-        description: 'Agent 3 – Výpočet efektivního věku a přiřazení kategorie (BR-G6). Čistě deterministický (bez AI). Rekonstrukce má vždy přednost před rokem výstavby.',
-        inputs: 'year_built (rok výstavby), year_reconstructed (rok rekonstrukce) z kontextu pipeline.',
-        outputs: 'effective_age (číslo v letech), age_source ("rekonstrukce"|"výstavba"), category (1–5), category_description, reference_year (2026).',
-        thresholds: 'Kat.1: 0–5 let. Kat.2: 6–15 let. Kat.3: 16–30 let. Kat.4: 31–50 let. Kat.5: 50+ let (+ automatické varování). FAIL pouze pokud chybí oba roky.',
-        prompt: `Jsi expert na hodnocení stáří nemovitostí. Tvým úkolem je:
+        description: 'Agent 3 – Výpočet efektivního věku a přiřazení kategorie (BR-G6). Plně deterministický (bez AI volání). Rekonstrukce má vždy přednost. Referenční rok: 2026.',
+        inputs: 'year_built (rok výstavby), year_reconstructed (rok rekonstrukce).',
+        outputs: 'effective_age, age_source ("rekonstrukce"|"výstavba"), category (1–5), category_description, reference_year.',
+        thresholds: 'Kat.1: 0–5 let. Kat.2: 6–15 let. Kat.3: 16–30 let. Kat.4: 31–50 let. Kat.5: 50+ let (+ varování). FAIL pouze pokud chybí oba roky.',
+        prompt: `Plně deterministický agent – nepotřebuje AI/LLM volání.
 
-1. Vypočítat EFEKTIVNÍ VĚK nemovitosti podle vzorce:
-   - Pokud existuje rok rekonstrukce: efektivní_věk = 2026 - rok_rekonstrukce
-   - Pokud ne: efektivní_věk = 2026 - rok_výstavby
-   - Rekonstrukce má VŽDY přednost.
+VZOREC:
+- Pokud existuje rok rekonstrukce: efektivní_věk = 2026 - rok_rekonstrukce
+- Pokud ne: efektivní_věk = 2026 - rok_výstavby
+- Rekonstrukce má VŽDY přednost.
 
-2. Přiřadit PRIMÁRNÍ KATEGORII (1-5) dle efektivního věku:
-   - Kat. 1: 0-5 let (novostavba / čerstvá rekonstrukce)
-   - Kat. 2: 6-15 let (moderní)
-   - Kat. 3: 16-30 let (starší, ale udržovaný)
-   - Kat. 4: 31-50 let (starší, vyžaduje pozornost)
-   - Kat. 5: 50+ let (starý, potenciální rizika)
-
-POZN.: Tento agent je plně deterministický – nepotřebuje AI/LLM volání.`,
+KATEGORIE (1-5) dle efektivního věku:
+- Kat. 1: 0-5 let (novostavba / čerstvá rekonstrukce)
+- Kat. 2: 6-15 let (moderní)
+- Kat. 3: 16-30 let (starší, ale udržovaný)
+- Kat. 4: 31-50 let (starší, vyžaduje pozornost)
+- Kat. 5: 50+ let (starý, potenciální rizika)`,
     },
     {
         name: 'Inspektor',
         icon: '🔍',
         color: '#059669',
-        description: 'Agent 4 – Vizuální inspekce technického stavu (ANO/NE pro online ocenění). Hledá blokovací vady: probíhající rekonstrukce, opadlá omítka >15%, statické trhliny v nosném zdivu, vlhkost/plísně, celková neobyvatelnost. Zastaralé vybavení nevadí, pokud je stavba v pořádku.',
-        inputs: 'Všechny nahrané obrázky (JPEG bytes, max 1000 tokenů odpovědi).',
-        outputs: 'verdikt ("ANO"|"NE"), duvod (2 věty, česky, konkrétní nález).',
-        thresholds: 'FAIL (verdikt=NE): probíhající rekonstrukce, omítka >15% chybí, diagonální trhliny v nosném zdivu, viditelná vlhkost/plísně, poškozená střecha / vybydlenost. SUCCESS (verdikt=ANO): funkční a kompletní dům, i zastaralý.',
-        prompt: `Jsi specializovaný inspektor nemovitostí. Tvým úkolem je na základě vizuální analýzy fotografií rozhodnout, zda je rodinný dům (RD) způsobilý pro automatizované online ocenění.
+        description: 'Agent 4 – Vizuální inspekce technického stavu (ANO/NE). Verdikt MUSÍ vycházet z kombinace EXTERIÉRU i INTERIÉRU – nikdy jen jedno! Finální verdikt = horší z obou hodnocení. Hledá: probíhající rekonstrukce, opadlou omítku >15%, statické trhliny, vlhkost/plísně, celkovou neobyvatelnost.',
+        inputs: 'Všechny nahrané obrázky (JPEG bytes).',
+        outputs: 'verdikt ("ANO"|"NE"), duvod (formát: "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Závěr].")',
+        thresholds: 'FAIL (NE): probíhající rekonstrukce, omítka >15% chybí, diagonální trhliny, viditelná vlhkost/plísně, poškozená střecha. SUCCESS (ANO): funkční a kompletní dům, i zastaralý.',
+        prompt: `Jsi specializovaný inspektor nemovitostí. Rozhodneš, zda je RD způsobilý pro online ocenění.
 
-Základní princip: Hledáš dům, který je obyvatelný a funkční. Nevadí zastaralé vybavení, pokud je stavba v dobrém technickém stavu.
+KLÍČOVÉ PRAVIDLO – KOMBINACE EXTERIÉRU A INTERIÉRU:
+Verdikt MUSÍ vycházet z hodnocení OBOU pohledů. Finální verdikt = horší z obou.
 
-Rozhodovací kritéria (Kdy zvolit NE):
-1. Probíhající rekonstrukce: chybějící podlahy, odhalené cihly, vytrhané rozvody, lešení
-2. Stav fasády: omítka opadaná na více než 15 % viditelné plochy
-3. Statické vady (Kritické): trhliny a praskliny v nosném zdivu (zejména diagonální nad okny/dveřmi)
-4. Vlhkost a plísně: mapy vlhkosti, solné výkvěty, plísně v rozích
-5. Celková neobyvatelnost: poškozená střecha, vybitá okna, vybydlenost
+Rozhodovací kritéria (NE):
+1. Probíhající rekonstrukce (chybějící podlahy, odhalené cihly, lešení)
+2. Stav fasády (omítka opadaná > 15 %)
+3. Statické vady (trhliny v nosném zdivu, zejména diagonální)
+4. Vlhkost a plísně (mapy vlhkosti, solné výkvěty, plísně)
+5. Celková neobyvatelnost (poškozená střecha, vybitá okna)
 
-Odpovídej maximálně ve dvou větách v důvodu.
+Kritéria (ANO):
+- Starý, esteticky zastaralý, ale kompletní a funkční.
+- Čistý, suchý a bez prasklin – PLATÍ PRO OBOJÍ SOUČASNĚ.
+
+V důvodu VŽDY: "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Závěr]."
 VRAŤ POUZE VALIDNÍ JSON: {"verdikt": "ANO"|"NE", "duvod": "..."}`,
     },
     {
         name: 'PorovnavacDokumentu',
         icon: '📋',
         color: '#7c3aed',
-        description: 'Agent 5 – Porovnání dat z formuláře (JSON) s fotodokumentací. Nejdůležitější kontrola: počet podlaží (rozlišuje 2NP vs. podkroví vs. půda). Detailní analýza vikýřů, střešních oken, šikmých stropů. Automatická korekce AI verdiktu dle skutečných výsledků kontrol (check[]). Přeskočí, pokud nejsou data z formuláře.',
-        inputs: 'property_data (JSON z formuláře: stav, podlaží, střecha, podsklepení, plocha, vytápění, rok). Až 10 fotek (JPEG bytes).',
-        outputs: 'verdict ("SHODA"|"ČÁSTEČNÁ_SHODA"|"NESHODA"), confidence (0.0–1.0), checks[] → pro každou kontrolu: field, declared, observed, match (bool), note. warnings[], recommendations[].',
-        thresholds: 'SUCCESS: všechny checks match=true → verdict="SHODA". WARN: 1+ neshodnout → "ČÁSTEČNÁ_SHODA". FAIL: 0 shod → "NESHODA". Automatická korekce: kód přepíše AI verdikt dle počtu match/mismatch.',
-        prompt: `Jsi expert na validaci nemovitostí. Porovnej údaje z formuláře ocenění rodinného domu s přiloženou fotodokumentací.
+        description: 'Agent 5 – Porovnání dat z formuláře (PDF/manuální) s fotodokumentací. Nejdůležitější: počet podlaží (3-bodový test podkroví, detekce změny materiálu fasády vs. nového podlaží). Profesionální odhad podlahové plochy (m²) z exteriéru. Automatická korekce AI verdiktu dle skutečných match/mismatch. Využívá Strážce klasifikace.',
+        inputs: 'property_data (JSON z formuláře), až 10 fotek s klasifikačními štítky ze Strážce.',
+        outputs: 'verdict ("SHODA"|"ČÁSTEČNÁ_SHODA"|"NESHODA"), confidence, checks[] (podlaží, plocha, střecha, stav, podsklepení, vytápění, podkroví).',
+        thresholds: 'SUCCESS: všechny checks match=true → "SHODA". WARN: 1+ neshoda → "ČÁSTEČNÁ_SHODA". FAIL: 0 shod → "NESHODA". Backend přepisuje AI verdikt dle skutečných match/mismatch.',
+        prompt: `Jsi expertní odhadce nemovitostí. Křížově ověř údaje z dotazníku klienta s fotodokumentací.
 
-NEJDŮLEŽITĚJŠÍ KONTROLA – POČET PODLAŽÍ:
-- 1NP (přízemí) = vždy se počítá
-- 2NP (patro) = plné svislé stěny
-- Podkroví (obytné) = střešní okna, vikýře → POČÍTÁ SE jako podlaží
-- Půda (neobytná) = bez oken, neupravená → NEPOČÍTÁ SE
-- Suterén/sklep = podzemní podlaží
+POČET PODLAŽÍ – NEJDŮLEŽITĚJŠÍ KONTROLA:
+⚠️ ZMĚNA MATERIÁLU FASÁDY ≠ NOVÉ PODLAŽÍ!
+✅ Rozlišující znak podlaží: viditelná STROPNÍ/PODLAŽNÍ LINIE
+❌ Pouhá změna materiálu, barvy nebo textury fasády NENÍ důkazem!
 
-JAK POZNAT Z FOTEK:
-- Počítej řady oken nad sebou na exteriéru
-- Okna ve střeše (vikýře, Velux) = obytné podkroví
-- Šikmé stropy na interiéru = podkroví
+DETEKCE PODKROVÍ – PŘÍSNÝ 3-BODOVÝ TEST:
+✅ Podmínka 1: Šikmé stropy na interiérových fotkách
+✅ Podmínka 2: Sedlová/mansardová/valbová střecha z exteriéru
+✅ Podmínka 3: Střešní okna (velux) nebo vikýře viditelné z exteriéru
 
-Kontroluj: plochu (shoda ±20%), typ střechy, stav, podsklepení, typ vytápění.
+ODHAD PODLAHOVÉ PLOCHY:
+A) Odhadni půdorysné rozměry z exteriéru (okno ~1,5m, dveře ~0,9m)
+B) Hrubá zastavěná plocha 1NP
+C) Odpočítej 20 % na zdi = čistá plocha
+D) Vynásob počtem plných NP
+E) Podkroví = cca 60 % čisté plochy přízemí
+F) Sečti → porovnej s deklarací (tolerance ±25 %)
 
-Vrať JSON: {"verdict": ..., "confidence": ..., "overall_summary": ..., "checks": [...], "warnings": [...], "recommendations": [...]}`,
-    },
-    {
-        name: 'GeoValidator',
-        icon: '📍',
-        color: '#ea580c',
-        description: 'Agent 6 – GPS validace + vizuální porovnání s panoramou Mapy.cz. Hierarchie: (1) Geocoding adresy přes Mapy.cz API, (2) Haversine vzdálenost EXIF GPS vs. adresa, (3) Stažení panoramy z Mapy.cz Static API (800×450 px), (4) AI výběr nejlepší exteriérové fotky (nejprve ze Strazce klasifikací, potom vlastní AI volání), (5) Vizuální porovnání fotek, (6) Kontrola stáří fotek (max 90 dní), (7) AI odhad ročního období z vizuálních indicií (jen pokud <4 fotek mají EXIF datum).',
-        inputs: 'images + EXIF GPS/datum, property_address, Strazce classifications[] (pro výběr ext. fotky). Vyžaduje API klíče: MAPY_CZ_API_KEY.',
-        outputs: 'photo_results[] → pro každou fotku distance_m, photo_address (reverse geocode), status (ok/warn/fail). visual_comparison → match_verdict ("shoda"|"možná_shoda"|"neshoda"), confidence, comparison_text. panorama_url. season_estimation → estimated_season, confidence, reasoning, freshness_concern.',
-        thresholds: 'GPS WARN: >500m od adresy. GPS FAIL: >2000m. Stáří fotek FAIL: >90 dní od EXIF data. Roční období WARN: odhadnutá sezóna nesedí s aktuálním měsícem (±3 měsíce).',
-        prompt: `Jsi expert na vizuální porovnávání nemovitostí.
+STAV DOMU = horší z hodnocení exteriéru a interiéru.
 
-Dostáváš DVĚ fotografie:
-1. Nahrané foto – fotka RD dodaná klientem (pohled z ulice / přední fasáda)
-2. Panorama z Mapy.cz – automaticky stažená panorama ze souřadnic nemovitosti
-
-TVŮJ ÚKOL: Porovnej obě fotky a popiš, co vidíš.
-
-STRUKTURA ODPOVĚDI (JSON):
-- match_verdict: "shoda" | "možná_shoda" | "neshoda"
-- confidence: 0.0-1.0
-- comparison_text: podrobný popis (3-5 vět)
-- matching_features: ["barva fasády", "tvar střechy", ...]
-- differing_features: ["jiný úhel pohledu", ...]
-- notes: roční období, rekonstrukce, jiný úhel...
-
-PRAVIDLA:
-- Jiný dům nebo jiná lokace → "neshoda"
-- Barva, tvar, střecha shodné → "shoda"
-- Podobné ale nejistota → "možná_shoda"`,
+Vrať JSON: {verdict, confidence, overall_summary, checks[], warnings[], recommendations[]}`,
     },
     {
         name: 'KatastralniAnalytik',
         icon: '🏛️',
         color: '#0891b2',
-        description: 'Agent 7 – Analýza LV + ortofoto. Parsuje PDF Listu vlastnictví (vlastní lv_parser), AI analýza právních rizik (zástavní práva, věcná břemena, zákazy zcizení, exekuce, přístup). Geocoduje adresu → stáhne ortofoto z ČÚZK WMS (satellite 1024×1024px) + katastrální hranice → flood-fill zvýraznění parcel (cyan) + žluté hranice → AI detekce nezakreslených staveb s bounding boxy. Přeskočí, pokud LV nebylo nahráno.',
-        inputs: 'lv_pdf_path (PDF soubor), selected_parcels[] (vybrané parcely z UI), property_address. Vyžaduje MAPY_CZ_API_KEY pro geocoding.',
-        outputs: 'risks[] → každé riziko má severity ("vysoké"|"střední"), category, description, recommendation. overall_risk_level. access_assessment (zajištěný/nezajištěný/nelze posoudit). ortofoto_url + ortofoto_annotated_url (s barevnými boxy nad nezakreslenými stavbami). buildings_detected[] s bbox souřadnicemi.',
-        thresholds: 'FAIL: 1+ vysoké riziko (zástavní právo / VB užívání / zákaz zcizení / nezajištěný přístup). WARN: 1+ střední riziko. SUCCESS: žádné riziko. Nezakreslená vedlejší stavba >45m² → střední. Přístavba >16m² → střední.',
+        description: 'Agent 6 – Analýza LV + ortofoto. Parsuje PDF Listu vlastnictví (vlastní lv_parser), AI analýza právních rizik. Geocoduje adresu → stáhne ortofoto z ČÚZK WMS (1024×1024px) + katastrální hranice → flood-fill zvýraznění parcel (cyan) + žluté hranice → AI detekce nezakreslených staveb. Přeskočí, pokud LV nebylo nahráno.',
+        inputs: 'lv_pdf_path (PDF soubor), selected_parcels[] (vybrané parcely z UI), property_address. Vyžaduje MAPY_CZ_API_KEY.',
+        outputs: 'risks[] (severity, category, description, recommendation). ortofoto_url + ortofoto_annotated_url (s bounding boxy). buildings_detected[]. access_assessment.',
+        thresholds: 'FAIL: 1+ vysoké riziko (zástavní právo / VB užívání / zákaz zcizení). WARN: 1+ střední riziko (ostatní VB, exekuce, plomby, nezajištěný přístup). Nezakreslená stavba >45m² → střední.',
         prompt: `PROMPT 1 – Právní analýza LV:
-Jsi expert na právní analýzu listu vlastnictví pro účely bankovních hypotečních úvěrů.
-
 Tato 3 rizika MUSÍ BÝT VYSOKÉ: Zástavní práva, Věcné břemeno užívání, Zákazy zcizení.
 Všechna ostatní MUSÍ BÝT STŘEDNÍ: exekuce, insolvence, plomby, spoluvlastnictví, BPEJ/ZPF.
 
-Přístup: ZAJIŠTĚNÝ pokud přístupová parcela je komunikace OR ve vlastnictví obce/státu OR je VB přístupu OR spoluvlastnictví vlastníka.
+Přístup: ZAJIŠTĚNÝ pokud přístupová parcela je komunikace OR ve vlastnictví obce/státu
+OR je VB přístupu OR spoluvlastnictví vlastníka.
 
 ---
 PROMPT 2 – Ortofoto (detekce nezakreslených staveb):
-Jsi expert na analýzu leteckých/satelitních snímků pro účely bankovních ocenění.
-
 Hledej STAVBY na pozemcích, které NEJSOU zakresleny v katastru:
 1. Vedlejší stavba >45m² → RIZIKO STŘEDNÍ
 2. Přístavba k hlavní stavbě >16m² → RIZIKO STŘEDNÍ
-
-Pro každou detekovanou stavbu uveď bounding box v procentech obrázku (bbox_x, bbox_y, bbox_w, bbox_h).`,
+Pro každou stavbu uveď bounding box v procentech obrázku.`,
     },
     {
-        name: 'Odhadce',
-        icon: '💰',
-        color: '#10b981',
-        description: 'Agent 8 – Tržní ocenění NHZP porovnávací metodou. Hierarchie: (1) Geocoding adresy přes Nominatim (OpenStreetMap), (2) Progressivní vyhledávání inzerátů sreality.cz (2→5→10→15→30 km, fallback celá ČR), (3) AI výběr 3 nejpodobnějších vzorků + přiřazení K1–K8 koeficientů, (4) BACKEND vždy přepočítá NHZP z koeficientů (nedůvěřuje AI aritmetice), (5) Sanity checks → zastropování max cenou vzorků ×1.15 a absolutní strop 25M. Koeficienty jsou sanitizovány do přísných rozsahů. To AI jsou odesílány i fotky oceňované nemovitosti (pro K4/K5).',
-        inputs: 'property_data (adresa, plocha, stav, střecha, vytápění), images[] (pro vizuální analýzu stavu). Volitelně valuation_overrides (manuální přepsání z UI).',
-        outputs: 'odhad_czk (NHZP v Kč), duvod (komentář k trhu), vzorky[] → pro každý vzorek: cena_czk, velikost, adresa, jc (Kč/m²), io (index odlišnosti), upravena_jc, koeficienty {k1..k8}, zdroj_url, obrazek_url (proxy).',
-        thresholds: 'K1=0.85 vždy (rozsah 0.80–0.90). K2–K3=0.90–1.10. K4=0.85–1.15. K5=0.80–1.20. K6:0.90–1.10. K7–K8=0.95–1.05. NHZP cap: min(max_sample×1.15, 25M). Frontend: NHZP capped at 1.5× AI odhad AND max_sample×1.15.',
-        prompt: `Jsi soudní znalec a bankovní odhadce nemovitostí s 20letou praxí v ČR.
-Provádíš ocenění POROVNÁVACÍ METODOU (NHZP).
+        name: 'GeoValidator',
+        icon: '📍',
+        color: '#ea580c',
+        description: 'Agent 7 – GPS validace + vizuální porovnání s panoramou Mapy.cz. Hierarchie: (1) Geocoding adresy přes Mapy.cz API, (2) Haversine vzdálenost EXIF GPS vs. adresa, (3) Stažení panoramy 800×450px, (4) AI výběr nejlepší exteriérové fotky (nejprve ze Strážce klasifikací, pak vlastní AI), (5) Vizuální porovnání fotek, (6) Kontrola stáří fotek (max 90 dní), (7) AI odhad ročního období z vizuálních indicií (jen pokud <4 fotek má EXIF datum).',
+        inputs: 'images + EXIF GPS/datum, property_address, Strážce classifications[]. Vyžaduje MAPY_CZ_API_KEY.',
+        outputs: 'photo_results[] (distance_m, photo_address, status). visual_comparison (match_verdict, confidence, comparison_text). panorama_url. season_estimation.',
+        thresholds: 'GPS WARN: >500m od adresy. GPS FAIL: >2000m. Stáří fotek FAIL: >90 dní. Roční období WARN: odhadnutá sezóna nesedí s aktuálním měsícem (±3 měsíce).',
+        prompt: `PROMPT 1 – Vizuální porovnání s panoramou:
+Porovnej nahrané foto klientem s panoramou z Mapy.cz.
+match_verdict: "shoda" | "možná_shoda" | "neshoda"
 
-POSTUP:
-KROK 1 – Vyber přesně 3 NEJPODOBNĚJŠÍ vzorky (velikost > stav > lokalita).
-KROK 2 – Ke každému přiřaď K1–K8:
-• K = 1.00 → shodná vlastnost
-• K < 1.00 → vzorek LEPŠÍ (snížíme upravenou JC)
-• K > 1.00 → vzorek HORŠÍ (navýšíme upravenou JC)
+PROMPT 2 – Výběr přední fotky:
+Vyber fotku NEJLÉPE ukazující PŘEDNÍ FASÁDU / POHLED Z ULICE.
+NIKDY nevyber interiérovou fotku ani detail.
 
-POVINNÉ ROZSAHY:
-• K1 (Redukce pramene) = VŽDY 0.85 (inzerce o ~15% nad prodejní cenou)
-• K2 (Velikost): 0.90–1.10
-• K3 (Poloha): 0.90–1.10
-• K4 (Provedení/vybavení): 0.85–1.15
-• K5 (Celkový stav): 0.80–1.20
-• K6 (Vliv pozemku): 0.90–1.10
-• K7 (Úvaha znalce): 0.95–1.05
-• K8 (Energ. náročnost): 0.95–1.05
-
-KROK 3 – VÝPOČET:
-JC_i = cena_i / plocha_i
-IO_i = K1 × K2 × K3 × K4 × K5 × K6 × K7 × K8
-Upravena_JC_i = JC_i × IO_i
-NHZP = průměr(Upravena_JC) × plocha_oceňovaného
-
-Vrať JSON: {nhzp_czk, duvod, plocha_ocenovaneho, vzorky[{id, jc, io, upravena_jc, koeficienty, oduvodneni_koeficientu}]}`,
+PROMPT 3 – Odhad ročního období (fallback bez EXIF):
+Posuzuj: vegetaci, sníh, světlo, trávu, oblečení lidí, stav zahrady, bazén.
+Vrať: estimated_season, confidence, reasoning, freshness_concern.`,
     },
     {
         name: 'Strateg',
         icon: '🎯',
         color: '#4f46e5',
-        description: 'Agent 9 (finální) – Agregace výsledků všech předchozích agentů a stanovení semaforu. Prioritní přehled: Strazce FAIL (neúplné/neaktuální fotkyt) → červená. Inspektor FAIL (špatný stav) → červená. Jakýkoliv FAIL nebo 3+ varování → červená. 1–2 varování → oranžová. Vše OK → zelená. Generuje lidsky čitelný report přes AI (Gemini/GPT).',
-        inputs: 'Výsledky všech 8 předchozích agentů (agent_results{}). Vždy spustí jako poslední.',
-        outputs: 'semaphore ("ONLINE"|"SUPERVISED"|"VRÁTIT KLIENTOVI"), semaphore_color ("green"|"orange"|"red"), semaphore_reason, final_category (1–5), total_warnings, human_report (čitelný text generovaný AI).',
-        thresholds: 'GREEN (ONLINE): 0 varování + 0 selhání. ORANGE (SUPERVISED): 1–2 varování. RED (VRÁTIT KLIENTOVI): Strazce FAIL OR Inspektor FAIL OR jakýkoliv FAIL OR 3+ varování. Inspektor FAIL přepíše kategorii na 5.',
+        description: 'Agent 8 (finální) – Agregace výsledků všech předchozích agentů. Deterministický semafor: Strážce FAIL → VRÁTIT KLIENTOVI. Inspektor FAIL nebo jakýkoliv FAIL nebo 3+ varování → SUPERVISED. 1–2 varování → SUPERVISED. Vše OK → ONLINE. Generuje lidsky čitelný report přes AI.',
+        inputs: 'Výsledky všech 7 předchozích agentů. Vždy spustí jako poslední.',
+        outputs: 'semaphore ("ONLINE"|"SUPERVISED"|"VRÁTIT KLIENTOVI"), semaphore_color, semaphore_reason, final_category (1–5), human_report.',
+        thresholds: 'GREEN (ONLINE): 0 varování + 0 selhání. ORANGE (SUPERVISED): 1+ varování NEBO jakýkoliv fail (kromě Strážce). RED (VRÁTIT KLIENTOVI): Strážce FAIL (neúplná/neaktuální fotodok.).',
         prompt: `Jsi senior analytik nemovitostí. Napiš stručný, čitelný report česky, profesionálně.
 Nepoužívej technický žargon. Nepiš o "agentech" – piš o kontrolách a zjištěních.
 
 STRUKTURA REPORTU:
-1. Shrnutí (2-3 věty – celkový verdikt, nejdůležitější zjištění)
+1. Shrnutí (2-3 věty)
 2. Fotodokumentace (kompletnost, kvalita)
-3. Stav nemovitosti (technický stav, nalezené vady)
-4. Věk a kategorizace (efektivní věk, přiřazená kategorie)
-5. Ověření autentičnosti (manipulace fotek, GPS ověření lokace)
-6. Porovnání dokumentů (shoda/neshoda dat z formuláře s fotodokumentací)
-7. Doporučení (co doporučuješ jako další krok)
+3. Stav nemovitosti (technický stav, vady)
+4. Věk a kategorizace (efektivní věk, kategorie)
+5. Ověření autentičnosti (manipulace fotek, GPS)
+6. Porovnání dokumentů (shoda/neshoda dat z formuláře)
+7. Doporučení (další krok)
 
-Piš stručně – každá sekce max 2-3 věty. Pokud je vše v pořádku, řekni "bez nálezu".
-Vrať POUZE text reportu, bez markdownu ani JSON.
+Piš stručně – každá sekce max 2-3 věty.
 
 ---
-SEMAFOR PRAVIDLA (deterministická logika, nelze ovlivnit promptem):
-• Strazce FAIL → VRÁTIT KLIENTOVI (neúplná/neaktuální fotodok.)
-• Inspektor FAIL → VRÁTIT KLIENTOVI (špatný tech. stav)
-• has_fail OR warns ≥ 3 → VRÁTIT KLIENTOVI
+SEMAFOR (deterministická logika):
+• Strážce FAIL (neaktuální EXIF) → VRÁTIT KLIENTOVI
+• Strážce FAIL (neúplné fotky) → VRÁTIT KLIENTOVI
+• Inspektor FAIL / has_fail / warns ≥ 3 → SUPERVISED
 • warns 1–2 → SUPERVISED
 • vše OK → ONLINE`,
     },
@@ -293,29 +238,32 @@ const TECH_STACK = [
             'WebSocket streaming (ping/pong keepalive)',
             'Pillow + piexif (zpracování obrázků, EXIF extrakce)',
             'httpx (async HTTP pro API volání)',
-            'pypdf (parsování PDF dokumentů)',
+            'pypdf + pdfplumber (parsování PDF dokumentů)',
             'lv_parser (vlastní parser Listu vlastnictví)',
+            'Apify REST API (scraping realitních portálů)',
         ]
     },
     {
         category: 'AI / LLM',
         items: [
-            'GPT-4o (primární model – OpenAI kompatibilní endpoint)',
-            'Google Gemini 2.0 Flash (fallback / alternativa)',
+            'Google Gemini 3.1 Flash / Pro (primární model)',
+            'OpenAI GPT-5.4 / GPT-5.4 mini / GPT-4.1 / o4-mini',
+            'Unified LLMClient (Gemini + OpenAI-compatible endpoint)',
             'Multimodální prompty (text + obrázky – JPEG bytes)',
             'Structured JSON output (response_format: json_object)',
-            'Temperature 0.3 pro výpočty (Odhadce), 0.7 pro analytiku',
+            'Exponential backoff retry (429 rate limit protection)',
+            'Google Cloud Vision – web detection (stažení fotek z internetu)',
         ]
     },
     {
         category: 'Datové zdroje',
         items: [
-            'ČÚZK WMS – ortofoto (https://ags.cuzk.gov.cz) + katastrální mapa (hranice_parcel, parcelni_cisla)',
+            'ČÚZK WMS – ortofoto + katastrální mapa (hranice_parcel, parcelni_cisla)',
             'ČÚZK Nahlížení – List vlastnictví (parsovaný PDF)',
             'Mapy.cz API v1 – geocoding, reverse geocoding, panorama (800×450)',
-            'Sreality.cz (neoficiální) – inzeráty RD (GPS filtr, oblast filtr)',
+            'Apify actor (martas_kristof~cz-reality-scraper) – sreality.cz + bezrealitky.cz',
             'Nominatim / OpenStreetMap – geocoding pro Odhadce',
-            'Google Cloud Vision – web detection (stažení fotek z internetu)',
+            'Google Cloud Vision – web detection (blocked domains)',
         ]
     },
     {
@@ -353,10 +301,11 @@ export default function AppInfo({ onClose }: { onClose: () => void }) {
                             Architektura
                         </h3>
                         <p className={styles.sectionDesc}>
-                            Aplikace implementuje <strong>multi-agentní pipeline</strong> — sérii specializovaných AI agentů,
+                            Aplikace implementuje <strong>multi-agentní pipeline</strong> — sérii 8 specializovaných AI agentů,
                             kteří postupně analyzují fotografickou dokumentaci a podkladové dokumenty rodinného domu.
                             Každý agent má specifický prompt a roli. Agenti běží <strong>sekvenčně</strong> (kvůli
                             paměťovým limitům free-tier hostingu) a výsledky streamují přes <strong>WebSocket</strong> v reálném čase.
+                            Podporuje volbu LLM modelu (Gemini 3.1 Flash/Pro, GPT-5.4, GPT-4.1, o4-mini) přes unified LLMClient.
                         </p>
                         <div className={styles.techGrid}>
                             {TECH_STACK.map((cat) => (
