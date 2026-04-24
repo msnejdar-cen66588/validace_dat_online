@@ -25,9 +25,30 @@ Musíš perfektně určit, kolik má dům reálných obytných podlaží.
 
 POVINNÝ POSTUP – VŽDY ZAČNI EXTERIÉREM:
   KROK 1: Najdi fotky označené jako EXTERIER_* (přední, zadní, boční pohled).
-  KROK 2: Na exteriérových fotkách spočítej řady oken nad sebou. Každá řada standardních oken = 1 obytné podlaží. DVĚ řady oken = 2 obytná podlaží (1NP + 2NP).
-  KROK 3: Teprve poté zkontroluj interiér pro potvrzení.
+  KROK 2: Na exteriérových fotkách spočítej STROPNÍ/PODLAŽNÍ LINIE (viditelné horizontální předěly mezi patry: římsy, parapetní linie, změna výšky oken). Podlaží = prostor mezi dvěma stropními/podlažními liniemi.
+  KROK 3: Spočítej řady oken, ale POZOR – okna patří ke STEJNÉMU podlaží, pokud jsou ve stejné výškové zóně mezi dvěma podlažními liniemi, i když mají různý materiál fasády kolem sebe.
+  KROK 4: Teprve poté zkontroluj interiér pro potvrzení.
   NIKDY nepiš "Exteriér není k dispozici" pokud existují fotky označené EXTERIER_*!
+
+⚠️ NEJČASTĚJŠÍ CHYBA – ZMĚNA MATERIÁLU FASÁDY ≠ NOVÉ PODLAŽÍ:
+  Velmi často mají české rodinné domy v rámci JEDNOHO podlaží RŮZNÉ materiály fasády:
+  - Část stěny s omítkou + část z neomítnutých cihel (probíhající rekonstrukce/nástavba)
+  - Dolní část stěny s původní omítkou + horní část s novou omítkou jiné barvy
+  - Sokl z kamene + stěna z cihel/omítky
+  
+  ❌ TOTO NIKDY NEPOČÍTEJ JAKO SAMOSTATNÉ PODLAŽÍ! Rozlišujícím znakem podlaží je:
+    ✅ Viditelná STROPNÍ/PODLAŽNÍ LINIE (římsa, překlad, parapetní linie) oddělující dvě výškové zóny
+    ✅ Samostatná ŘADA OKEN v každé výškové zóně s vlastními parapety na RŮZNÉ výškové úrovni
+    ❌ Pouhá změna materiálu, barvy nebo textury fasády NENÍ důkazem nového podlaží!
+  
+  PŘÍKLAD CHYBY: Dům s přízemím (omítka) a 1. patrem (horní část omítka, dolní část nové neomítnuté cihly kvůli rekonstrukci) → agent chybně vidí 3 „řady" a počítá 3 podlaží. SPRÁVNĚ je to 2 podlaží – změna materiálu uprostřed patra je rekonstrukce, ne nové podlaží.
+
+🔢 POVINNÉ STRUKTUROVANÉ POČÍTÁNÍ (Chain-of-Thought):
+  Než napíšeš výsledný počet podlaží, MUSÍŠ explicitně projít tento checklist:
+  1. Kolik VODOROVNÝCH PODLAŽNÍCH LINIÍ (říms, překladů oddělujících patra) vidím na fasádě? → N linií = max N+1 zón
+  2. Pro KAŽDOU výškovou zónu: jaká okna tam jsou? Na jaké výšce jsou parapety?
+  3. Jsou v rámci jedné zóny RŮZNÉ materiály fasády? → Pokud ANO, je to STÁLE JEDNO podlaží!
+  4. SANITY CHECK: Typický český rodinný dům má 1-2 nadzemní podlaží (výjimečně 3). Pokud mi vychází 3+, OVĚŘ ZNOVU, zda jsem nespočítal změnu materiálu jako samostatné podlaží.
 
 DETEKCE OBYTNÉHO PODKROVÍ – PŘÍSNÝ 3-BODOVÝ TEST:
 Obytné podkroví smíš potvrdit POUZE pokud jsou splněny VŠECHNY TŘI podmínky současně:
@@ -42,12 +63,14 @@ Pokud JAKÁKOLIV z těchto 3 podmínek NENÍ splněna → podkroví NEPOTVRZUJ, 
   ❌ PLNÉ 2NP s rovným stropem: Pokud z exteriéru vidíš 2 řady normálních oken nad sebou s plnými stěnami → je to plné 2. nadzemní podlaží, NE podkroví. I kdyby interiér vypadal „zkoseně" kvůli optice.
   ❌ VALBOVÁ STŘECHA BEZ OKEN: Valbová střecha sama o sobě NEZNAMENÁ podkroví. Bez střešních oken a bez viditelných šikmých stropů uvnitř jde o neobytnou půdu.
   ❌ NÍZKÝ STROP ≠ ŠIKMÝ STROP: Některé domy mají v horním patře nižší stropy, ale rovné. To NENÍ podkroví.
+  ❌ REKONSTRUKCE / NÁSTAVBA: Neomítnuté cihly, nový materiál na ČÁSTI stěny jednoho podlaží = probíhající stavební práce, NE nové podlaží. Hledej stropní linii, ne změnu materiálu.
 
 - POČÍTÁNÍ ZVENKU:
   - 1 řada normálních oken v plné stěně = 1. nadzemní podlaží (1NP, přízemí).
-  - 2 řady nad sebou v plných rovných stěnách = 1NP + 2NP.
+  - 2 řady nad sebou v plných rovných stěnách s viditelnou PODLAŽNÍ LINIÍ mezi nimi = 1NP + 2NP.
   - Okna ve štítu nebo ve střeše = obytné podkroví (pouze pokud splňuje 3-bodový test).
   - Okna nízko u země = suterén/sklep.
+  - RŮZNÉ materiály/barvy fasády v rámci jedné výškové zóny = STÁLE JEDNO podlaží!
 
 ⚠️ KRITICKÉ PRAVIDLO – NEPOČÍTEJ PODKROVÍ DVAKRÁT:
   Pokud jsou okna nebo balkón umístěny UVNITŘ střešního trojúhelníku (ve štítu), jde o PODKROVÍ, nikoliv o plné nadzemní podlaží!
@@ -58,6 +81,7 @@ Pokud JAKÁKOLIV z těchto 3 podmínek NENÍ splněna → podkroví NEPOTVRZUJ, 
   - Dům se sedlovou střechou, přízemní okna + balkón/okna ve štítové části = 1NP + podkroví = **2 obytné úrovně**
   - Dům s rovnou stěnou do výšky okapu, 2 řady oken v rovných stěnách = 1NP + 2NP = **2 obytná podlaží** (bez podkroví)
   - Dům 2 řady oken v rovných stěnách + navíc střešní okna = 1NP + 2NP + podkroví = **3 obytné úrovně** (ale toto je vzácné!)
+  - Dům s přízemím (omítka) + patrem (část omítka, část neomítnuté cihly) = 1NP + 2NP = **2 podlaží** (ne 3!)
 
   ZLATÉ PRAVIDLO: Celkový počet obytných úrovní = plná NP + podkroví (0 nebo 1). Podkroví NAHRAZUJE plné patro, nikdy se k němu nepřičítá, pokud okna/balkón jsou ve štítové části střechy.
 
@@ -104,9 +128,9 @@ Vrať výsledek POUZE jako validní JSON:
     {
       "field": "počet podlaží",
       "declared": "hodnota z formuláře",
-      "observed": "co je vidět na fotkách (křížové ověření zvenku)",
+      "observed": "X plná nadzemní podlaží (+ podkroví pokud splňuje 3-bodový test)",
       "match": true/false,
-      "note": "Analýza exteriér vs. interiér, vyvrácení případných falešných šikmin."
+      "note": "STRUKTUROVANÉ POČÍTÁNÍ: 1) Podlažní linie na fasádě: [popis]. 2) Výškové zóny a okna: [popis per zóna]. 3) Změny materiálu v rámci zóny: [ano/ne, popis]. 4) Sanity check: [výsledek]. Závěr: [X] podlaží."
     },
     {
       "field": "celková podlahová plocha",
