@@ -246,10 +246,10 @@ class ValuationPipeline:
         lat, lon = coords if coords else (None, None)
         print(f"[Valuation] Geocoded '{address}' → {coords}, district={district_id}")
 
-        # ── Fetch 20 samples from Apify (sreality + bezrealitky) ──
+        # ── Fetch 50 samples from Apify (filtered by region) ──
         await self._notify_step("collector", "processing",
-            "Stahuji 20 vzorků z realitních portálů (sreality + bezrealitky)...")
-        raw_samples = await _fetch_apify_samples(lat, lon, floor_area_int, count=20)
+            f"Stahuji vzorky z realitních portálů pro region: {address}...")
+        raw_samples = await _fetch_apify_samples(lat, lon, floor_area_int, count=50, address=address)
         print(f"[Valuation] Apify returned {len(raw_samples)} raw samples")
 
         # ── Filter invalid prices (unit price must be 10k–250k Kč/m²) ──

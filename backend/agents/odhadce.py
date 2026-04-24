@@ -246,69 +246,118 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+# ── Map address keywords to Apify region filter values ──────────────────────
+_REGION_MAP = {
+    "praha": "Praha", "hlavní město": "Praha",
+    "středočes": "Středočeský", "kladno": "Středočeský", "benešov": "Středočeský",
+    "kolín": "Středočeský", "příbram": "Středočeský", "beroun": "Středočeský",
+    "mělník": "Středočeský", "nymburk": "Středočeský", "rakovník": "Středočeský",
+    "mladá boleslav": "Středočeský", "kutná hora": "Středočeský",
+    "jihočes": "Jihočeský", "české budějovice": "Jihočeský", "tábor": "Jihočeský",
+    "písek": "Jihočeský", "strakonice": "Jihočeský", "jindřichův hradec": "Jihočeský",
+    "český krumlov": "Jihočeský", "prachatice": "Jihočeský",
+    "plzeňs": "Plzeňský", "plzeň": "Plzeňský", "klatovy": "Plzeňský",
+    "domažlice": "Plzeňský", "rokycany": "Plzeňský", "tachov": "Plzeňský",
+    "karlovars": "Karlovarský", "karlovy vary": "Karlovarský", "cheb": "Karlovarský",
+    "sokolov": "Karlovarský",
+    "ústeck": "Ústecký", "ústí nad labem": "Ústecký", "teplice": "Ústecký",
+    "most": "Ústecký", "chomutov": "Ústecký", "děčín": "Ústecký",
+    "litoměřice": "Ústecký", "louny": "Ústecký",
+    "libereck": "Liberecký", "liberec": "Liberecký", "jablonec": "Liberecký",
+    "semily": "Liberecký", "česká lípa": "Liberecký",
+    "královéhradeck": "Královéhradecký", "hradec králové": "Královéhradecký",
+    "trutnov": "Královéhradecký", "náchod": "Královéhradecký", "jičín": "Královéhradecký",
+    "rychnov": "Královéhradecký",
+    "pardubick": "Pardubický", "pardubice": "Pardubický", "chrudim": "Pardubický",
+    "svitavy": "Pardubický", "ústí nad orlicí": "Pardubický",
+    "vysočin": "Vysočina", "jihlava": "Vysočina", "třebíč": "Vysočina",
+    "žďár nad sázavou": "Vysočina", "havlíčkův brod": "Vysočina", "pelhřimov": "Vysočina",
+    "jihomoravs": "Jihomoravský", "brno": "Jihomoravský", "znojmo": "Jihomoravský",
+    "břeclav": "Jihomoravský", "hodonín": "Jihomoravský", "vyškov": "Jihomoravský",
+    "blansko": "Jihomoravský", "oslavany": "Jihomoravský", "ivančice": "Jihomoravský",
+    "rosice": "Jihomoravský",
+    "olomouck": "Olomoucký", "olomouc": "Olomoucký", "prostějov": "Olomoucký",
+    "přerov": "Olomoucký", "šumperk": "Olomoucký", "jeseník": "Olomoucký",
+    "zlínsk": "Zlínský", "zlín": "Zlínský", "kroměříž": "Zlínský",
+    "uherské hradiště": "Zlínský", "vsetín": "Zlínský",
+    "moravskoslezsk": "Moravskoslezský", "ostrava": "Moravskoslezský",
+    "opava": "Moravskoslezský", "karviná": "Moravskoslezský", "frýdek": "Moravskoslezský",
+    "nový jičín": "Moravskoslezský", "bruntál": "Moravskoslezský",
+}
+
+def _address_to_region(address: str) -> str | None:
+    """Map property address to one of the 14 Czech regions for Apify filter."""
+    addr_lower = address.lower()
+    for key in sorted(_REGION_MAP.keys(), key=len, reverse=True):
+        if key in addr_lower:
+            return _REGION_MAP[key]
+    return None
+
+
 async def _fetch_apify_samples(
     lat: float | None,
     lon: float | None,
     floor_area_m2: int,
-    count: int = 12,
+    count: int = 50,
     category: str = "domy",
+    address: str = "",
 ) -> list[dict]:
-    """Načte reálné inzeráty ze sreality.cz přes Apify actor.
+    """Fetch real estate listings via Apify REST API (no SDK needed).
 
-    Apify actor 'LozSX930wmiwBDeEl' scrapuje SReality a vrací strukturovaná data
-    včetně detailů (plocha, stav, rok stavby, obrázky, GPS).
-    Volání je synchronní (actor.call čeká na dokončení), proto ho pouštíme přes
-    asyncio.to_thread, aby neblokoval event loop.
+    Uses the `martas_kristof~cz-reality-scraper` actor which scrapes
+    sreality.cz + bezrealitky.cz and returns data with GPS, price,
+    area, images, and working URLs.
 
-    ⚠️ count snížen na 12 (z 20) pro úsporu RAM na Render 512MB free tier.
+    Strategy: fetch up to 50 listings from the correct REGION,
+    then filter by GPS distance (max 10km from property).
     """
-    import asyncio
     import gc
 
     apify_token = os.environ.get("APIFY_API_TOKEN", "")
     if not apify_token:
-        print("APIFY_API_TOKEN not set – cannot fetch samples")
+        print("[Apify] APIFY_API_TOKEN not set – cannot fetch samples")
         return []
+
+    # Detect region from address
+    region = _address_to_region(address) if address else None
+    regions = [region] if region else []
+    print(f"[Apify] Address='{address}' → region={region}, fetching {count} listings")
 
     input_config = {
         "portals": ["sreality", "bezrealitky"],
         "categories": [category],
         "offerType": ["prodej"],
-        "regions": [],           # Celá ČR – filter by distance post-fetch
+        "regions": regions,
         "maxListings": count,
         "enableHistory": False,
     }
 
-    def _run_actor():
-        """Synchronní volání Apify actoru – poběží v threadu."""
-        try:
-            from apify_client import ApifyClient
-        except ImportError:
-            print("apify-client package not installed – pip install apify-client")
-            return []
-        try:
-            client = ApifyClient(token=apify_token)
-            run = client.actor("LozSX930wmiwBDeEl").call(
-                run_input=input_config,
-                timeout_secs=120,  # Prevent hanging on slow runs
-            )
-            dataset_id = run.get("defaultDatasetId")
-            if not dataset_id:
-                print("Apify actor run finished but no dataset ID found")
-                return []
-            items = list(client.dataset(dataset_id).iterate_items())
-            # Free client memory immediately
-            del client
-            return items
-        except Exception as e:
-            print(f"Apify actor error: {e}")
-            return []
+    # Use direct REST API — simpler and uses less RAM than SDK
+    api_url = (
+        f"https://api.apify.com/v2/acts/martas_kristof~cz-reality-scraper"
+        f"/run-sync-get-dataset-items?token={apify_token}"
+    )
 
-    gc.collect()  # Free memory before heavy Apify call
-    raw_items = await asyncio.to_thread(_run_actor)
-    gc.collect()  # Free thread overhead
-    if not raw_items:
+    gc.collect()
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            resp = await client.post(
+                api_url,
+                json=input_config,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            raw_items = resp.json()
+    except Exception as e:
+        print(f"[Apify] REST API error: {e}")
         return []
+
+    gc.collect()
+    if not raw_items or not isinstance(raw_items, list):
+        print(f"[Apify] No items returned (got {type(raw_items).__name__})")
+        return []
+
+    print(f"[Apify] Received {len(raw_items)} raw listings from region={region}")
 
     results = []
     for i, item in enumerate(raw_items, 1):
@@ -333,7 +382,6 @@ async def _fetch_apify_samples(
                 size_m2 = int(re.sub(r"[^\d]", "", str(size_raw)) or "0")
             except (ValueError, TypeError):
                 pass
-        # Fallback: parse from name/title
         if not size_m2:
             title = item.get("name") or item.get("title") or ""
             m2_matches = re.findall(r"(\d+)\s*m[²2]", title)
@@ -342,7 +390,7 @@ async def _fetch_apify_samples(
 
         # ── Land area (Apify: "landArea") ──
         land_m2 = 0
-        land_raw = item.get("landArea") or item.get("land_area") or item.get("plot_area")
+        land_raw = item.get("landArea") or item.get("land_area")
         if land_raw:
             try:
                 land_m2 = int(re.sub(r"[^\d]", "", str(land_raw)) or "0")
@@ -356,34 +404,33 @@ async def _fetch_apify_samples(
             obrazek_url = images[0] if images else None
 
         # ── GPS (Apify: "lat" / "lon" at root level) ──
-        gps_lat = item.get("lat") or item.get("GPS_lat") or item.get("gps_lat") or item.get("latitude")
-        gps_lon = item.get("lon") or item.get("GPS_lon") or item.get("gps_lon") or item.get("longitude")
+        gps_lat = item.get("lat") or item.get("GPS_lat") or item.get("gps_lat")
+        gps_lon = item.get("lon") or item.get("GPS_lon") or item.get("gps_lon")
         try:
             gps_lat = float(gps_lat) if gps_lat else None
             gps_lon = float(gps_lon) if gps_lon else None
         except (ValueError, TypeError):
             gps_lat = gps_lon = None
 
-        # ── Distance from property ──
+        # ── Distance ──
         distance_km = None
         if lat and lon and gps_lat and gps_lon:
             distance_km = _haversine_km(lat, lon, gps_lat, gps_lon)
 
         # ── Address (Apify: "locality") ──
-        adresa = item.get("locality") or item.get("location") or item.get("address") or item.get("name") or item.get("title") or ""
+        adresa = item.get("locality") or item.get("location") or item.get("name") or ""
 
         # ── Details ──
         stav = item.get("condition") or item.get("stav") or ""
         rok_stavby = str(item.get("year_built") or item.get("rok_stavby") or "")
-        typ_domu = item.get("building_type") or item.get("house_type") or item.get("layout") or ""
-        pocet_podlazi = str(item.get("floors") or item.get("podlazi") or "")
+        typ_domu = item.get("building_type") or item.get("layout") or ""
 
-        # ── Source URL (Apify: "url" — functional sreality/bezrealitky link) ──
+        # ── Source URL ──
         zdroj_url = item.get("url") or item.get("link") or None
         source = item.get("source") or ""
         hash_id = item.get("id") or item.get("hash_id") or i
 
-        # ── Price per m² (Apify: "pricePerSqm") ──
+        # ── Price per m² ──
         price_per_m2 = item.get("pricePerSqm") or 0
         if not price_per_m2 and size_m2 > 0:
             price_per_m2 = round(price / size_m2)
@@ -400,21 +447,23 @@ async def _fetch_apify_samples(
             "stav": stav,
             "rok_stavby": rok_stavby,
             "typ_domu": typ_domu,
-            "pocet_podlazi": pocet_podlazi,
             "zdroj_url": zdroj_url,
             "obrazek_url": obrazek_url,
             "gps": {"lat": gps_lat, "lon": gps_lon} if gps_lat and gps_lon else None,
             "distance_km": round(distance_km, 1) if distance_km is not None else None,
         })
 
-    # Log summary for debugging
+    # Log summary
     with_gps = sum(1 for r in results if r.get("gps"))
     with_img = sum(1 for r in results if r.get("obrazek_url"))
     print(f"[Apify] Mapped {len(results)} samples: {with_gps} with GPS, {with_img} with images")
 
-    # Sort by distance (closest first) if we have coordinates
+    # Sort by distance (closest first)
     results.sort(key=lambda x: x.get("distance_km") or 999)
     return results
+
+
+
 
 
 async def _download_image_bytes(url: str, max_bytes: int = 120_000) -> bytes | None:
@@ -876,13 +925,10 @@ class OdhadceAgent(BaseAgent):
         if not upravene_jc_list:
             return {"nhzp": 0, "nhzp_min": 0, "nhzp_max": 0, "upravene_jc": []}
 
-        # Use MEDIAN for robustness against outliers
-        median_jc = statistics.median(upravene_jc_list)
-        nhzp = round(median_jc * floor_area_int)
-        
-        # Price range: from minimum to maximum modified unit price
+        # NHZP = exact midpoint of the price range (min+max)/2
         nhzp_min = round(min(upravene_jc_list) * floor_area_int)
         nhzp_max = round(max(upravene_jc_list) * floor_area_int)
+        nhzp = round((nhzp_min + nhzp_max) / 2)
 
         return {
             "nhzp": nhzp,
