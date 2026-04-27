@@ -6,6 +6,8 @@ interface AgentInfo {
     name: string;
     icon: string;
     color: string;
+    layman: string;       // co dělá jednoduše
+    techRole: string;     // technická role
     description: string;
     inputs: string;
     outputs: string;
@@ -18,6 +20,8 @@ const AGENTS: AgentInfo[] = [
         name: 'Strazce',
         icon: '🛡️',
         color: '#2870ED',
+        layman: 'Zkontroluje, jestli klient dodal dostatek fotek ze všech stran domu (zepředu, zezadu, z boku) i ze všech místností, a jestli jsou fotky pořízeny nedávno – ne starší než 90 dní. Bez kompletní a aktuální fotodokumentace nelze dům ocenit online.',
+        techRole: 'Multimodální klasifikace + EXIF validace',
         description: 'Agent 1 – Kontrola úplnosti fotodokumentace (BR-G4). Klasifikuje každou fotku do 17 kategorií (EXTERIER_PREDNI, INTERIER_KUCHYN atd.), ověřuje přítomnost povinných pohledů a aktuálnost EXIF metadat (max 90 dní). Rozlišuje podkroví vs. plné patro pomocí pravidel pro širokoúhlý objektiv.',
         inputs: 'Seznam obrázků (JPEG bytes). EXIF metadata (datum, GPS, model zařízení) pro validaci stáří.',
         outputs: 'classifications[] → pro každou fotku seznam kategorií a popis. summary → počty ext/int, has_cislo_popisne, has_front/rear/side, interior_rooms_found[], vedlejsi_stavba_visible. image_metadata{} s GPS a daty.',
@@ -47,6 +51,8 @@ Odpověz POUZE validním JSON.`,
         name: 'ForenzniAnalytik',
         icon: '🔬',
         color: '#dc2626',
+        layman: 'Odhalí, jestli jsou fotky upravované v Photoshopu, generované AI nebo prostě stažené z internetu (např. ze Sreality). Pokud klient pošle cizí fotky místo vlastních, agent to pozná. Chrání banku před podvody.',
+        techRole: 'Google Cloud Vision Web Detection + manipulation score',
         description: 'Agent 2 – Detekce manipulace fotografií (BR-G5). AI analýza generování, retušování, klonování + Google Cloud Vision Web Detection pro odhalení fotek stažených z internetu (sreality.cz, bezrealitky.cz atd.). Fotka nalezená na blocked domain = automatický score 1.0.',
         inputs: 'Obrázky + EXIF metadata. Google Cloud Vision (service account credentials) pro web detection.',
         outputs: 'photos[] → manipulation_score (0.0–1.0), confidence, is_ai_generated, is_downloaded_from_internet, findings[], risk_level. overall → avg/max score, flagged_count.',
@@ -69,6 +75,8 @@ Odpověz POUZE validním JSON.`,
         name: 'Historik',
         icon: '📅',
         color: '#92400e',
+        layman: 'Spočítá stáří domu čistě matematicky – žádná AI. Pokud byl dům rekonstruován, počítá od rekonstrukce. Výsledek přiřadí do kategorie 1–5 (novostavba → starý dům), která ovlivňuje výslednou cenu.',
+        techRole: 'Deterministický algoritmus – žádné LLM volání',
         description: 'Agent 3 – Výpočet efektivního věku a přiřazení kategorie (BR-G6). Plně deterministický (bez AI volání). Rekonstrukce má vždy přednost. Referenční rok: 2026.',
         inputs: 'year_built (rok výstavby), year_reconstructed (rok rekonstrukce).',
         outputs: 'effective_age, age_source ("rekonstrukce"|"výstavba"), category (1–5), category_description, reference_year.',
@@ -91,6 +99,8 @@ KATEGORIE (1-5) dle efektivního věku:
         name: 'Inspektor',
         icon: '🔍',
         color: '#059669',
+        layman: 'Prohlédne všechny fotky a posoudí technický stav domu. Hledá vážné závady: praskliny ve zdech, vlhkost, opadaná omítka, rozdělaná rekonstrukce. Pokud dům vypadá nebezpečně nebo nevhodně k bydlení, ocenění se zastaví.',
+        techRole: 'Multimodální LLM inspekce – kombinace exteriér + interiér',
         description: 'Agent 4 – Vizuální inspekce technického stavu (ANO/NE). Verdikt MUSÍ vycházet z kombinace EXTERIÉRU i INTERIÉRU – nikdy jen jedno! Finální verdikt = horší z obou hodnocení. Hledá: probíhající rekonstrukce, opadlou omítku >15%, statické trhliny, vlhkost/plísně, celkovou neobyvatelnost.',
         inputs: 'Všechny nahrané obrázky (JPEG bytes).',
         outputs: 'verdikt ("ANO"|"NE"), duvod (formát: "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Závěr].")',
@@ -118,6 +128,8 @@ VRAŤ POUZE VALIDNÍ JSON: {"verdikt": "ANO"|"NE", "duvod": "..."}`,
         name: 'PorovnavacDokumentu',
         icon: '📋',
         color: '#7c3aed',
+        layman: 'Porovná, co klient napsal ve formuláři (počet pater, plocha, typ střechy…) s tím, co je skutečně vidět na fotkách. Pokud klient tvrdí, že má třípatrový dům, ale na fotkách jsou jen dvě patra, agent to odhalí.',
+        techRole: '3-bodový test podkroví + odhad plochy z okno-měřítka + reuse Stražce klasifikací',
         description: 'Agent 5 – Porovnání dat z formuláře (PDF/manuální) s fotodokumentací. Nejdůležitější: počet podlaží (3-bodový test podkroví, detekce změny materiálu fasády vs. nového podlaží). Profesionální odhad podlahové plochy (m²) z exteriéru. Automatická korekce AI verdiktu dle skutečných match/mismatch. Využívá Strážce klasifikace.',
         inputs: 'property_data (JSON z formuláře), až 10 fotek s klasifikačními štítky ze Strážce.',
         outputs: 'verdict ("SHODA"|"ČÁSTEČNÁ_SHODA"|"NESHODA"), confidence, checks[] (podlaží, plocha, střecha, stav, podsklepení, vytápění, podkroví).',
@@ -150,6 +162,8 @@ Vrať JSON: {verdict, confidence, overall_summary, checks[], warnings[], recomme
         name: 'KatastralniAnalytik',
         icon: '🏛️',
         color: '#0891b2',
+        layman: 'Stáhne ortofoto (letecká mapa) z katastru a porovná ho s listem vlastnictví. Zkontroluje zástavní práva, exekuce a jestli na pozemku nestojí garáž nebo přístavba, která není zapsaná – to může být problém při oceňování.',
+        techRole: 'ČÚZK WMS ortofoto + PDF parsing LV + flood-fill detekce staveb',
         description: 'Agent 6 – Analýza LV + ortofoto. Parsuje PDF Listu vlastnictví (vlastní lv_parser), AI analýza právních rizik. Geocoduje adresu → stáhne ortofoto z ČÚZK WMS (1024×1024px) + katastrální hranice → flood-fill zvýraznění parcel (cyan) + žluté hranice → AI detekce nezakreslených staveb. Přeskočí, pokud LV nebylo nahráno.',
         inputs: 'lv_pdf_path (PDF soubor), selected_parcels[] (vybrané parcely z UI), property_address. Vyžaduje MAPY_CZ_API_KEY.',
         outputs: 'risks[] (severity, category, description, recommendation). ortofoto_url + ortofoto_annotated_url (s bounding boxy). buildings_detected[]. access_assessment.',
@@ -172,6 +186,8 @@ Pro každou stavbu uveď bounding box v procentech obrázku.`,
         name: 'GeoValidator',
         icon: '📍',
         color: '#ea580c',
+        layman: 'Ověří, jestli fotky jsou skutečně z toho domu, který klient zadal. Porovná GPS souřadnice fotek s adresou a navíc vizuálně porovná přední fotku domu s panoramou z Mapy.cz. Odhalí, pokud klient pošle fotky jiného domu.',
+        techRole: 'Haversine GPS distance + Mapy.cz panorama API + AI vizuální porovnání',
         description: 'Agent 7 – GPS validace + vizuální porovnání s panoramou Mapy.cz. Hierarchie: (1) Geocoding adresy přes Mapy.cz API, (2) Haversine vzdálenost EXIF GPS vs. adresa, (3) Stažení panoramy 800×450px, (4) AI výběr nejlepší exteriérové fotky (nejprve ze Strážce klasifikací, pak vlastní AI), (5) Vizuální porovnání fotek, (6) Kontrola stáří fotek (max 90 dní), (7) AI odhad ročního období z vizuálních indicií (jen pokud <4 fotek má EXIF datum).',
         inputs: 'images + EXIF GPS/datum, property_address, Strážce classifications[]. Vyžaduje MAPY_CZ_API_KEY.',
         outputs: 'photo_results[] (distance_m, photo_address, status). visual_comparison (match_verdict, confidence, comparison_text). panorama_url. season_estimation.',
@@ -192,6 +208,8 @@ Vrať: estimated_season, confidence, reasoning, freshness_concern.`,
         name: 'Strateg',
         icon: '🎯',
         color: '#4f46e5',
+        layman: 'Shromáždí výsledky všech předchozích kontrol a vydá finální verdikt. Zelená = vše OK, ocenění proběhne automaticky. Oranžová = jsou drobné problémy, případ dostane bankéř k přezkumu. Červená = fotky jsou nedostatečné nebo podvodné, případ se vrací klientovi.',
+        techRole: 'Deterministický semafor (prioritní logika) + AI generovaný report',
         description: 'Agent 8 (finální) – Agregace výsledků všech předchozích agentů. Deterministický semafor: Strážce FAIL → VRÁTIT KLIENTOVI. Inspektor FAIL nebo jakýkoliv FAIL nebo 3+ varování → SUPERVISED. 1–2 varování → SUPERVISED. Vše OK → ONLINE. Generuje lidsky čitelný report přes AI.',
         inputs: 'Výsledky všech 7 předchozích agentů. Vždy spustí jako poslední.',
         outputs: 'semaphore ("ONLINE"|"SUPERVISED"|"VRÁTIT KLIENTOVI"), semaphore_color, semaphore_reason, final_category (1–5), human_report.',
@@ -218,7 +236,29 @@ SEMAFOR (deterministická logika):
 • warns 1–2 → SUPERVISED
 • vše OK → ONLINE`,
     },
+    {
+        name: 'Odhadce',
+        icon: '💰',
+        color: '#16a34a',
+        layman: 'Stáhne z realitních portálů (Sreality, Bezrealitky) skutečné aktuální inzeráty podobných domů ve stejné lokalitě a porovná je s oceňovaným domem. Na základě porovnání odhadne tržní cenu – stejně jako to dělá soudní znalec při znaleckém posudku.',
+        techRole: 'Apify REST API scraping + porovnávací metoda NHZP (koeficienty K1–K8)',
+        description: 'Agent 9 – Tržní ocenění porovnávací metodou (NHZP). Stáhne reálné inzeráty přes Apify (martas_kristof~cz-reality-scraper), geocoduje adresu přes Nominatim/OpenStreetMap, AI přiřadí 8 koeficientů, backend deterministicky vypočítá NHZP. Benchmark dle ČSÚ 2024.',
+        inputs: 'property_data (adresa, plocha, stav), fotky oceňovaného domu (max 2). Vyžaduje APIFY_API_TOKEN.',
+        outputs: 'nhzp (Kč), nhzp_min/max, vzorky[] s koeficienty K1–K8 a odůvodněním, confidence score, benchmark Kč/m².',
+        thresholds: 'FAIL: méně než 3 vzorky (cena/m² mimo 10k–250k Kč). WARN: NHZP > 25M Kč nebo < 500k Kč, NHZP > 150 % nejdražšího vzorku. SUCCESS: NHZP v rozumném rozsahu.',
+        prompt: `Jsi soudní znalec a bankovní odhadce nemovitostí s 20letou praxí v ČR.
+Provádíš ocenění POROVNÁVACÍ METODOU (NHZP) dle české metodiky znaleckých posudků.
+
+KROK 1 – Vyber 5 nejpodobnějších vzorků (plocha → stav → lokalita).
+KROK 2 – Přiřaď koeficienty K1–K8:
+• K1 = VŽDY 0.90 (redukce inzerční ceny)
+• K2 = velikost objektu | K3 = poloha | K4 = provedení (porovnej fotky!)
+• K5 = celkový stav (porovnej fotky!) | K6 = pozemek | K7 = úvaha | K8 = energetika
+
+⚠️ NEPOČÍTEJ NHZP – backend provede výpočet. Vrať POUZE JSON s koeficienty.`,
+    },
 ];
+
 
 const TECH_STACK = [
     {
@@ -352,7 +392,39 @@ export default function AppInfo({ onClose }: { onClose: () => void }) {
                                     </button>
                                     {expandedAgent === agent.name && (
                                         <div className={styles.agentPrompt}>
-                                            <div className={styles.promptLabel}>System Prompt:</div>
+                                            {/* Layman */}
+                                            <div style={{ background: 'rgba(251,191,36,0.07)', borderBottom: '1px solid rgba(251,191,36,0.18)', padding: '12px 16px' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 5 }}>💡 Co to dělá – jednoduše</div>
+                                                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65 }}>{agent.layman}</div>
+                                            </div>
+                                            {/* Tech role */}
+                                            <div style={{ background: 'rgba(40,112,237,0.05)', borderBottom: '1px solid var(--border-color)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-blue)', textTransform: 'uppercase', letterSpacing: '0.7px' }}>⚙️ Klíčová technologie:</span>
+                                                <code style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-secondary)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 4, padding: '1px 7px' }}>{agent.techRole}</code>
+                                            </div>
+                                            {/* IO */}
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid var(--border-color)' }}>
+                                                <div style={{ padding: '10px 16px', borderRight: '1px solid var(--border-color)' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 4 }}>📥 Vstupy</div>
+                                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{agent.inputs}</div>
+                                                </div>
+                                                <div style={{ padding: '10px 16px' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 4 }}>📤 Výstupy</div>
+                                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{agent.outputs}</div>
+                                                </div>
+                                            </div>
+                                            {/* Thresholds */}
+                                            {agent.thresholds && (
+                                                <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: 8 }}>
+                                                    <span style={{ fontSize: 15, flexShrink: 0 }}>🎯</span>
+                                                    <div>
+                                                        <div style={{ fontSize: 10, fontWeight: 700, color: '#dc2626', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 3 }}>Rozhodovací logika (FAIL / WARN / OK)</div>
+                                                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{agent.thresholds}</div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {/* System Prompt */}
+                                            <div className={styles.promptLabel} style={{ padding: '10px 16px 4px' }}>{'</>'} System Prompt (zdrojová instrukce pro AI):</div>
                                             <pre className={styles.promptCode}>{agent.prompt}</pre>
                                         </div>
                                     )}
