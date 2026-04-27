@@ -1,4 +1,11 @@
-"""Pipeline Orchestrator – runs agents in parallel waves with real-time WebSocket updates."""
+"""Pipeline Orchestrator – runs agents in parallel waves with real-time WebSocket updates.
+
+Wave A (parallel): Strazce, ForenzniAnalytik, Historik, Inspektor
+Wave B (parallel): PorovnavacDokumentu, KatastralniAnalytik, GeoValidator
+Wave C (sequential, depends on all): Strateg
+
+No preventive sleeps – exponential backoff on 429 is handled inside LLMClient.
+"""
 import asyncio
 import json
 import time
@@ -18,8 +25,14 @@ from agents.katastralni_analytik import KatastralniAnalytikAgent
 from agents.strateg import StrategAgent
 
 
+# Wave definitions – order matters for frontend display
+WAVE_A = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor"]
+WAVE_B = ["PorovnavacDokumentu", "KatastralniAnalytik", "GeoValidator"]
+WAVE_C = ["Strateg"]
+
+
 class PipelineOrchestrator:
-    """Orchestrates the sequential execution of all validation agents."""
+    """Orchestrates the parallel-wave execution of all validation agents."""
 
     def __init__(self, session_id: str, model_name: str = "gemini"):
         self.session_id = session_id
@@ -37,7 +50,7 @@ class PipelineOrchestrator:
             "KatastralniAnalytik": KatastralniAnalytikAgent(model_name=model_name),
             "Strateg": StrategAgent(model_name=model_name),
         }
-        self.agent_order = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor", "GeoValidator", "PorovnavacDokumentu", "KatastralniAnalytik", "Strateg"]
+        self.agent_order = WAVE_A + WAVE_B + WAVE_C
         self.active_connections: list[WebSocket] = []
         self.is_running = False
         self.results = {}
@@ -74,10 +87,76 @@ class PipelineOrchestrator:
             "timestamp": time.time(),
         })
 
+    async def _notify_wave(self, wave_name: str, agents: list[str]):
+        """Notify frontend that a new wave is starting (multiple agents launching)."""
+        await self.broadcast({
+            "type": "pipeline_wave",
+            "pipeline_id": self.pipeline_id,
+            "wave": wave_name,
+            "agents": agents,
+            "timestamp": time.time(),
+        })
+
+    async def _run_agent(self, agent_name: str, context: dict, agent_results: dict) -> AgentResult:
+        """Run a single agent and broadcast its status. Safe to run concurrently."""
+        import gc
+        agent = self.agents[agent_name]
+
+        if context.get("custom_prompts", {}).get(agent_name):
+            agent.system_prompt = context["custom_prompts"][agent_name]
+
+        await self._notify_status(agent_name, "processing")
+        await self._notify_log(agent_name, f"Agent {agent_name} starting...")
+
+        run_context = {**context, "agent_results": dict(agent_results)}
+        result = await agent.execute(run_context)
+
+        for log_entry in agent.logs:
+            await self._notify_log(agent_name, log_entry.message, log_entry.level)
+
+        await self._notify_status(
+            agent_name,
+            result.status.value,
+            {"elapsed_time": agent.get_elapsed_time()},
+        )
+
+        self.results[agent_name] = agent.to_dict()
+        gc.collect()
+        return result
+
+    async def _run_wave(self, wave_name: str, agent_names: list[str], context: dict, agent_results: dict) -> dict:
+        """Run a list of agents in parallel. Returns dict of {agent_name: AgentResult}."""
+        await self._notify_wave(wave_name, agent_names)
+
+        tasks = {
+            name: asyncio.create_task(self._run_agent(name, context, agent_results))
+            for name in agent_names
+        }
+
+        wave_results = {}
+        for name, task in tasks.items():
+            try:
+                wave_results[name] = await task
+            except Exception as e:
+                await self._notify_log(name, f"Agent selhal: {e}", "error")
+                await self._notify_status(name, "fail")
+                self.results[name] = {
+                    "name": name, "status": "fail",
+                    "summary": f"Chyba: {e}", "errors": [str(e)],
+                }
+                wave_results[name] = AgentResult(
+                    status=AgentStatus.FAIL,
+                    summary=f"Chyba: {e}",
+                    errors=[str(e)],
+                )
+
+        return wave_results
+
     async def run_pipeline(self, context: dict) -> dict:
-        """Execute the full pipeline sequentially."""
+        """Execute the full pipeline in parallel waves."""
         self.is_running = True
         start_time = time.time()
+        import gc
 
         await self.broadcast({
             "type": "pipeline_start",
@@ -85,64 +164,31 @@ class PipelineOrchestrator:
             "session_id": self.session_id,
             "timestamp": start_time,
             "agents": self.agent_order,
+            # Let frontend know the wave structure so it can animate correctly
+            "waves": {
+                "A": WAVE_A,
+                "B": WAVE_B,
+                "C": WAVE_C,
+            },
         })
 
         agent_results = {}
 
-        # ── Sequential execution (Render free tier = 512MB RAM) ──
-        # Agents run one at a time to minimize memory.
-        # GeoValidator depends on Strazce, Strateg depends on all.
-        import gc
+        # ── Wave A: Independent agents (no dependencies) ──────────────────────
+        print("[Pipeline] === Wave A: Strazce, ForenzniAnalytik, Historik, Inspektor ===")
+        wave_a = await self._run_wave("A", WAVE_A, context, agent_results)
+        agent_results.update(wave_a)
+        gc.collect()
 
-        async def _run_agent(agent_name: str):
-            """Run a single agent sequentially."""
-            agent = self.agents[agent_name]
+        # ── Wave B: Depends on Wave A results ─────────────────────────────────
+        print("[Pipeline] === Wave B: PorovnavacDokumentu, KatastralniAnalytik, GeoValidator ===")
+        wave_b = await self._run_wave("B", WAVE_B, context, agent_results)
+        agent_results.update(wave_b)
+        gc.collect()
 
-            if context.get("custom_prompts", {}).get(agent_name):
-                agent.system_prompt = context["custom_prompts"][agent_name]
-
-            await self._notify_status(agent_name, "processing")
-            await self._notify_log(agent_name, f"Agent {agent_name} starting...")
-
-            run_context = {**context, "agent_results": dict(agent_results)}
-            result = await agent.execute(run_context)
-
-            for log_entry in agent.logs:
-                await self._notify_log(agent_name, log_entry.message, log_entry.level)
-
-            await self._notify_status(
-                agent_name,
-                result.status.value,
-                {"elapsed_time": agent.get_elapsed_time()},
-            )
-
-            self.results[agent_name] = agent.to_dict()
-            return result
-
-        # Run agents one by one
-        run_order = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor",
-                     "PorovnavacDokumentu", "KatastralniAnalytik", "GeoValidator"]
-
-        for agent_name in run_order:
-            try:
-                result = await _run_agent(agent_name)
-                agent_results[agent_name] = result
-            except Exception as e:
-                await self._notify_log(agent_name, f"Agent selhal: {e}", "error")
-                await self._notify_status(agent_name, "fail")
-                self.results[agent_name] = {
-                    "name": agent_name, "status": "fail",
-                    "summary": f"Chyba: {e}", "errors": [str(e)],
-                }
-            # Free memory between agent runs
-            gc.collect()
-            # Rate limit delay between agent runs to avoid 429 errors
-            if "gemini" not in self.model_name.lower():
-                await asyncio.sleep(3)   # OpenAI Tier 1 = 3 RPM
-            else:
-                await asyncio.sleep(2)   # Gemini free tier RPM protection
-
-        # Run Strateg with all previous results
+        # ── Wave C: Strateg – aggregates everything ───────────────────────────
+        print("[Pipeline] === Wave C: Strateg ===")
+        await self._notify_wave("C", WAVE_C)
         strategist = self.agents["Strateg"]
         strategist_context = {**context, "agent_results": agent_results}
 
@@ -150,7 +196,7 @@ class PipelineOrchestrator:
             strategist.system_prompt = context["custom_prompts"]["Strateg"]
 
         await self._notify_status("Strateg", "processing")
-        await self._notify_log("Strateg", "Strateg aggregating all results...")
+        await self._notify_log("Strateg", "Strateg agreguje výsledky všech agentů...")
 
         try:
             strategist_result = await strategist.execute(strategist_context)
@@ -175,11 +221,12 @@ class PipelineOrchestrator:
         )
 
         self.results["Strateg"] = strategist.to_dict()
+        gc.collect()
 
         total_time = round(time.time() - start_time, 2)
         self.is_running = False
+        print(f"[Pipeline] COMPLETE in {total_time}s")
 
-        # Final pipeline result
         final_result = {
             "pipeline_id": self.pipeline_id,
             "session_id": self.session_id,

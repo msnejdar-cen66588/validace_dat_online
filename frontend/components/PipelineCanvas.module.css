@@ -467,28 +467,94 @@
 
 @keyframes dotBlink { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
 
-/* ── Currently Processing Agent ── */
+/* ── Currently Processing – multi-agent wave banner ── */
+.currentAgentWave {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+  max-width: 480px;
+  margin-top: -8px;
+}
+
 .currentAgent {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
-  background: rgba(232, 240, 254, 0.5);
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(232, 240, 254, 0.55);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(40, 112, 237, 0.1);
   border-radius: var(--radius-pill);
-  width: 100%;
-  max-width: 420px;
-  margin-top: -8px;
+  animation: fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .currentAgentSpinner { flex-shrink: 0; animation: spin 1s linear infinite; display: flex; }
-.currentAgentLabel { font-size: 13px; color: var(--text-secondary); text-align: left; }
-.currentAgentDots { font-size: 18px; font-weight: bold; letter-spacing: 2px; color: var(--text-muted); margin-left: auto; }
-.currentAgentDots span:nth-child(1) { animation: dotBlink 1.4s infinite 0s; opacity: 0; }
-.currentAgentDots span:nth-child(2) { animation: dotBlink 1.4s infinite 0.2s; opacity: 0; }
-.currentAgentDots span:nth-child(3) { animation: dotBlink 1.4s infinite 0.4s; opacity: 0; }
+.currentAgentLabel { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+
+/* ── Wave Groups ── */
+.waveGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.waveHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  transition: all 0.3s ease;
+  margin-bottom: 2px;
+}
+
+.waveHeaderQueued {
+  background: rgba(244, 246, 250, 0.5);
+  color: var(--text-muted);
+  border: 1px solid rgba(226, 232, 240, 0.4);
+  opacity: 0.55;
+}
+
+.waveHeaderActive {
+  background: rgba(232, 240, 254, 0.6);
+  color: var(--accent-blue);
+  border: 1px solid rgba(40, 112, 237, 0.12);
+  box-shadow: 0 2px 8px rgba(40, 112, 237, 0.06);
+}
+
+.waveHeaderDone {
+  background: rgba(236, 253, 245, 0.5);
+  color: var(--accent-green);
+  border: 1px solid rgba(5, 150, 105, 0.1);
+  opacity: 0.8;
+}
+
+.waveIcon { font-size: 12px; }
+.waveLabel { flex: 1; }
+
+.waveSpinnerDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  animation: pulseDot 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.waveAgents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 4px;
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    PRE-START STATE
@@ -553,12 +619,39 @@
 .preStartTitle { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.3px; margin: 0; }
 .preStartSubtitle { font-size: 14px; color: var(--text-muted); margin-top: -8px; line-height: 1.5; }
 
+/* Wave groups on pre-start screen */
+.preStartWaves {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 480px;
+}
+
+.preStartWaveGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(226, 232, 240, 0.4);
+  border-radius: 14px;
+}
+
+.preStartWaveLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .preStartAgentsList {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  max-width: 440px;
+  gap: 6px;
+  justify-content: flex-start;
+  max-width: 100%;
 }
 
 .preStartAgentChip {
@@ -659,5 +752,6 @@
   .preStartAgentChip { padding: 6px 10px; font-size: 12px; }
   .preStartActions { flex-direction: column; width: 100%; }
   .startBtn, .editBtn { width: 100%; justify-content: center; }
-  .currentAgent { border-radius: var(--radius-lg); }
+  .currentAgentWave { gap: 6px; }
+  .waveHeader { font-size: 10px; }
 }
