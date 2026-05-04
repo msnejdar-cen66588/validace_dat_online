@@ -221,6 +221,8 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
     // Vzorec: JC = cena_vzorku / plocha_vzorku; IO = K1 × K2 × ... × K8;
     //         Upravená JC = JC × IO; NHZP = průměr(Upravené JC) × plocha_našeho_domu
     let adjustedNhzp = 0;
+    let adjustedMin = 0;
+    let adjustedMax = 0;
     const hasCustomCoeffs = Object.keys(customCoeffs).length > 0;
 
     if (valuation?.details?.odhad_czk) {
@@ -240,23 +242,24 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
             // Ochrana proti tomu, když AI vrátí procenta (85 místo 0.85)
             if (num > 5.0) num = num / 100.0;
             // Per-key ranges přesně dle backendu (COEFFICIENT_RANGES)
+            // MUST match backend COEFFICIENT_RANGES exactly!
             const ranges: Record<string, [number, number]> = {
-                'k1': [0.80, 0.90],
-                'k2': [0.90, 1.10],
-                'k3': [0.90, 1.10],
-                'k4': [0.85, 1.15],
+                'k1': [0.85, 0.95],
+                'k2': [0.80, 1.20],
+                'k3': [0.80, 1.20],
+                'k4': [0.80, 1.20],
                 'k5': [0.80, 1.20],
-                'k6': [0.90, 1.10],
-                'k7': [0.95, 1.05],
-                'k8': [0.95, 1.05],
+                'k6': [0.80, 1.20],
+                'k7': [0.90, 1.10],
+                'k8': [0.90, 1.10],
             };
             const [lo, hi] = ranges[key] || [0.80, 1.20];
             return Math.max(lo, Math.min(num, hi));
         };
 
-        // Přepočítej NHZP pokud uživatel upravil koeficienty NEBO vždy (pro konzistenci)
+        // Přepočítej NHZP: NHZP = přesný střed rozmezí (min+max)/2
         if (samples.length > 0 && analyzedArea > 0) {
-            let totalUpravenaJc = 0;
+            const adjustedJcList: number[] = [];
 
             samples.forEach((s: any) => {
                 const kData = hasCustomCoeffs ? (customCoeffs[s.id] || s.koeficienty || {}) : (s.koeficienty || {});
@@ -273,32 +276,17 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                 const jc = s.cena_czk / sampleArea;
 
                 // Upravená JC = JC × IO
-                totalUpravenaJc += jc * io;
+                adjustedJcList.push(jc * io);
             });
 
-            const avgUpravenaJc = totalUpravenaJc / samples.length;
-            const computed = Math.round(avgUpravenaJc * analyzedArea);
-
-            // Sanity checks:
-            // 1. Nesmí překročit 1.5× AI odhad
-            const aiEstimate = valuation.details.odhad_czk;
-            // 2. Absolutní strop 25 mil Kč pro běžný RD
-            const maxAbsolute = 25_000_000;
-            // 3. Nesmí překročit max cenu vzorku * 1.15
-            const maxSamplePrice = Math.max(...samples.map((s: any) => s.cena_czk || 0));
-            const maxFromSamples = Math.round(maxSamplePrice * 1.15);
-
-            let finalNhzp = computed;
-            if (aiEstimate > 0 && finalNhzp > aiEstimate * 1.5) {
-                finalNhzp = Math.round(aiEstimate * 1.5);
+            if (adjustedJcList.length > 0) {
+                const minJc = Math.min(...adjustedJcList);
+                const maxJc = Math.max(...adjustedJcList);
+                adjustedMin = Math.round(minJc * analyzedArea);
+                adjustedMax = Math.round(maxJc * analyzedArea);
+                // NHZP = přesný STŘED cenového rozpětí
+                adjustedNhzp = Math.round((adjustedMin + adjustedMax) / 2);
             }
-            if (maxFromSamples > 0 && finalNhzp > maxFromSamples) {
-                finalNhzp = maxFromSamples;
-            }
-            if (finalNhzp > maxAbsolute) {
-                finalNhzp = maxAbsolute;
-            }
-            adjustedNhzp = finalNhzp;
 
         } else if (samples.length > 0) {
             // Nelze přepočítat NHZP bez zadané plochy – zobrazíme AI odhad
@@ -499,9 +487,9 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                 <div style={{ fontSize: '40px', fontWeight: 800, color: '#1428A0', letterSpacing: '-1px' }}>
                                     {adjustedNhzp.toLocaleString('cs-CZ')} Kč
                                 </div>
-                                {valuation.details.odhad_min && valuation.details.odhad_max && (
+                                {adjustedMin > 0 && adjustedMax > 0 && (
                                     <div style={{ fontSize: '14px', color: '#64748b', marginTop: '4px' }}>
-                                        Cenové rozpětí: {valuation.details.odhad_min.toLocaleString('cs-CZ')} – {valuation.details.odhad_max.toLocaleString('cs-CZ')} Kč
+                                        Cenové rozpětí: {adjustedMin.toLocaleString('cs-CZ')} – {adjustedMax.toLocaleString('cs-CZ')} Kč
                                     </div>
                                 )}
                                 {valuation.details.benchmark && (

@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
 import styles from './page.module.css';
-import { uploadFiles, startPipeline, parsePdf, parseLv, uploadBatch, startBatch, type UploadResponse, type PipelineResult, type PropertyData, type LVData, type BatchCase } from '@/lib/api';
+import { uploadFiles, startPipeline, parsePdf, parseLv, uploadBatch, startBatch, uploadBjFiles, startBjPipeline, parseBjPdf, type UploadResponse, type PipelineResult, type PropertyData, type LVData, type BatchCase, type ApartmentPropertyData, type BjUploadResponse, BJ_DATA_LABELS } from '@/lib/api';
 import PipelineCanvas from '@/components/PipelineCanvas';
 import ResultsDashboard from '@/components/ResultsDashboard';
 import ProcessingLoader from '@/components/ProcessingLoader';
@@ -79,12 +79,25 @@ export default function Home() {
   const lvInputRef = useRef<HTMLInputElement>(null);
 
   // Batch mode state
-  const [mode, setMode] = useState<'single' | 'batch' | 'contract'>('single');
+  const [mode, setMode] = useState<'single' | 'batch' | 'contract' | 'bj'>('single');
   const [batchId, setBatchId] = useState<string | null>(null);
   const [batchCases, setBatchCases] = useState<BatchCase[]>([]);
   const [batchUploading, setBatchUploading] = useState(false);
   const batchInputRef = useRef<HTMLInputElement>(null);
   const [selectedBatchCaseIds, setSelectedBatchCaseIds] = useState<Set<string>>(new Set());
+
+  // BJ (apartment) state
+  const [bjFiles, setBjFiles] = useState<File[]>([]);
+  const [bjPdfFile, setBjPdfFile] = useState<File | null>(null);
+  const [bjExtractedData, setBjExtractedData] = useState<ApartmentPropertyData | null>(null);
+  const [bjFloorAreaDoc, setBjFloorAreaDoc] = useState<File | null>(null);
+  const [bjLvFile, setBjLvFile] = useState<File | null>(null);
+  const [bjDragActive, setBjDragActive] = useState(false);
+  const [bjPdfParsing, setBjPdfParsing] = useState(false);
+  const bjFileInputRef = useRef<HTMLInputElement>(null);
+  const bjPdfInputRef = useRef<HTMLInputElement>(null);
+  const bjFloorDocInputRef = useRef<HTMLInputElement>(null);
+  const bjLvInputRef = useRef<HTMLInputElement>(null);
 
   const ws = useWebSocket(sessionId);
   const batchWs = useBatchWebSocket(batchId);
@@ -305,6 +318,93 @@ export default function Home() {
     }
   };
 
+  // ── BJ Handlers ──
+  const handleBjFiles = useCallback((newFiles: FileList | File[]) => {
+    const arr = Array.from(newFiles);
+    setBjFiles(prev => [...prev, ...arr]);
+    setError(null);
+  }, []);
+
+  const handleBjDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setBjDragActive(false);
+    handleBjFiles(e.dataTransfer.files);
+  }, [handleBjFiles]);
+
+  const processBjPdf = useCallback(async (file: File) => {
+    setBjPdfFile(file);
+    setBjPdfParsing(true);
+    setError(null);
+    try {
+      const data = await parseBjPdf(file);
+      if (data) {
+        setBjExtractedData({ ...data });
+      } else {
+        setError('PDF bytu bylo zpracováno, ale nepodařilo se extrahovat údaje.');
+      }
+    } catch {
+      setError('Chyba při zpracování PDF bytu.');
+    } finally {
+      setBjPdfParsing(false);
+    }
+  }, []);
+
+  const handleBjUpload = async () => {
+    if (bjFiles.length === 0) {
+      setError('Nahrajte alespoň 4 fotografie bytu.');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    setProcessingPhase('uploading');
+    setStep('processing');
+
+    try {
+      const addressVal = bjExtractedData?.adresa || undefined;
+      setProcessingPhase('compressing');
+
+      const result = await uploadBjFiles(
+        bjFiles,
+        addressVal,
+        bjPdfFile || undefined,
+        bjExtractedData || undefined,
+        bjLvFile || undefined,
+        bjFloorAreaDoc || undefined,
+      );
+      setUploadData(result as any);
+      setSessionId(result.session_id);
+
+      if (result.property_data) {
+        setBjExtractedData(result.property_data);
+      }
+
+      setProcessingPhase('starting');
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      setProcessingPhase('ready');
+      await new Promise(resolve => setTimeout(resolve, 800));
+      setStep('pipeline');
+    } catch (e: any) {
+      setError(e.message || 'Chyba při nahrávání');
+      setStep('upload');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleStartBjPipeline = async () => {
+    if (!sessionId) return;
+    startBjPipeline(sessionId, selectedModel)
+      .then((result) => {
+        if (!ws.pipelineResult && result.agents) {
+          setPipelineResult(result);
+        }
+      })
+      .catch((e: any) => {
+        setError(e.message || 'Chyba při spuštění BJ pipeline');
+      });
+  };
+
   const MODEL_PROVIDERS = [
     {
       id: 'google',
@@ -405,7 +505,9 @@ export default function Home() {
             </div>
             <div>
               <h1 className={styles.logoTitle}>Kontrola vstupních dat</h1>
-              <p className={styles.logoSubtitle}>Online ocenění rodinných domů</p>
+              <p className={styles.logoSubtitle}>
+                {mode === 'bj' ? 'Online ocenění bytových jednotek' : 'Online ocenění rodinných domů'}
+              </p>
             </div>
           </div>
           <div className={styles.steps}>
@@ -440,15 +542,20 @@ export default function Home() {
         {step === 'upload' && (
           <section className={styles.uploadSection}>
             <div className={styles.uploadContainer}>
-              {mode !== 'contract' ? (
-                <h2 className={styles.sectionTitle}>
-                  <span className={styles.titleGradient}>Nahrajte fotografie</span>
-                  <span className={styles.titleSub}>rodinných domů</span>
-                </h2>
-              ) : (
+              {mode === 'contract' ? (
                 <h2 className={styles.sectionTitle}>
                   <span className={styles.titleGradient}>Analýza smluv</span>
                   <span className={styles.titleSub}>AI agent pro extrakci dat</span>
+                </h2>
+              ) : mode === 'bj' ? (
+                <h2 className={styles.sectionTitle}>
+                  <span className={styles.titleGradient}>Nahrajte podklady</span>
+                  <span className={styles.titleSub}>bytové jednotky</span>
+                </h2>
+              ) : (
+                <h2 className={styles.sectionTitle}>
+                  <span className={styles.titleGradient}>Nahrajte fotografie</span>
+                  <span className={styles.titleSub}>rodinných domů</span>
                 </h2>
               )}
 
@@ -459,6 +566,9 @@ export default function Home() {
                 </button>
                 <button className={`${styles.modeBtn} ${mode === 'batch' ? styles.modeBtnActive : ''}`} onClick={() => setMode('batch')}>
                   📁 Hromadná kontrola
+                </button>
+                <button className={`${styles.modeBtn} ${mode === 'bj' ? styles.modeBtnActive : ''}`} onClick={() => setMode('bj')}>
+                  🏢 Bytová jednotka
                 </button>
                 <button className={`${styles.modeBtn} ${mode === 'contract' ? styles.modeBtnActive : ''}`} onClick={() => setMode('contract')}>
                   📄 Analýza smluv
@@ -947,6 +1057,245 @@ export default function Home() {
             </div>
           )}
 
+          {/* BJ (Bytová jednotka) Mode */}
+          {mode === 'bj' && (<div>
+            {/* BJ Photo Drop Zone */}
+            <div
+              className={`${styles.dropZone} ${bjDragActive ? styles.dropZoneActive : ''} ${bjFiles.length > 0 ? styles.dropZoneHasFiles : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setBjDragActive(true); }}
+              onDragLeave={() => setBjDragActive(false)}
+              onDrop={handleBjDrop}
+              onClick={() => bjFileInputRef.current?.click()}
+            >
+              <input
+                ref={bjFileInputRef}
+                type="file"
+                multiple
+                accept=".jpg,.jpeg,.png,.heic,.heif,.webp,.tiff,.bmp"
+                onChange={(e) => e.target.files && handleBjFiles(e.target.files)}
+                className={styles.fileInput}
+              />
+              <div className={styles.dropIcon}>
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                  <path d="M24 32V16M24 16L18 22M24 16L30 22" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M8 32V36C8 38.2 9.8 40 12 40H36C38.2 40 40 38.2 40 36V32" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <p className={styles.dropText}>
+                {bjDragActive ? 'Přetáhněte sem' : 'Přetáhněte fotky bytu nebo klikněte pro výběr'}
+              </p>
+              <p className={styles.dropHint}>Min. 4 fotky (max. stáří 1 měsíc): exteriér domu, vstup, interiér všech místností</p>
+            </div>
+
+            {/* BJ File list */}
+            {bjFiles.length > 0 && (
+              <div className={styles.fileList}>
+                <div className={styles.fileListHeader}>
+                  <span>📸 {bjFiles.length} {bjFiles.length === 1 ? 'fotografie' : 'fotografií'}</span>
+                  <button className={styles.clearFiles} onClick={() => setBjFiles([])}>
+                    Vymazat vše
+                  </button>
+                </div>
+                <div className={styles.fileGrid}>
+                  {bjFiles.map((f, i) => (
+                    <div key={i} className={styles.fileItem}>
+                      <span className={styles.fileName}>{f.name}</span>
+                      <button className={styles.removeFile} onClick={() => setBjFiles(prev => prev.filter((_, idx) => idx !== i))}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* BJ PDF Upload */}
+            <div className={styles.pdfSection}>
+              <div className={styles.sectionLabel}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M3 1H8.5L11 3.5V13H3V1Z" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M8 1V4H11" stroke="currentColor" strokeWidth="1.5" />
+                </svg>
+                PDF formulář ocenění bytu
+              </div>
+              {!bjPdfFile ? (
+                <div
+                  className={styles.pdfDropzone}
+                  onClick={() => bjPdfInputRef.current?.click()}
+                >
+                  <input
+                    ref={bjPdfInputRef}
+                    type="file"
+                    accept=".pdf"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) processBjPdf(file);
+                    }}
+                    style={{ display: 'none' }}
+                  />
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  <span>Klikněte nebo přetáhněte PDF „Zadané údaje pro on-line ocenění bytu"</span>
+                </div>
+              ) : (
+                <div className={styles.pdfFileDisplay}>
+                  <div className={styles.pdfFileName}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M11.5 4L5.5 10L2.5 7" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {bjPdfFile.name}
+                    <button
+                      className={styles.pdfRemove}
+                      onClick={() => { setBjPdfFile(null); setBjExtractedData(null); }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {bjPdfParsing && <span className={styles.spinner} />}
+                </div>
+              )}
+            </div>
+
+            {/* BJ Extracted Data */}
+            {bjExtractedData && (
+              <div className={styles.extractedData}>
+                <div className={styles.extractedDataTitle}>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M11.5 4L5.5 10L2.5 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Extrahované údaje z PDF – bytová jednotka
+                </div>
+                <div className={styles.extractedGrid}>
+                  {(Object.keys(BJ_DATA_LABELS) as (keyof typeof BJ_DATA_LABELS)[]).map((key) => {
+                    const label = BJ_DATA_LABELS[key];
+                    const value = (bjExtractedData as any)[key];
+                    return (
+                      <div key={key} className={styles.extractedField}>
+                        <label className={styles.extractedLabel}>{label}</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          value={value || ''}
+                          placeholder="nenalezeno"
+                          onChange={(e) => setBjExtractedData(prev => prev ? { ...prev, [key]: e.target.value || null } : prev)}
+                          style={{ fontSize: '13px', padding: '6px 8px' }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Floor Area Document Upload */}
+            <div className={styles.pdfSection}>
+              <div className={styles.sectionLabel}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect x="2" y="2" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M5 5H9M5 7H9M5 9H7" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                </svg>
+                Dokument potvrzující podlahovou plochu
+              </div>
+              {!bjFloorAreaDoc ? (
+                <div
+                  className={styles.pdfDropzone}
+                  onClick={() => bjFloorDocInputRef.current?.click()}
+                >
+                  <input
+                    ref={bjFloorDocInputRef}
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) setBjFloorAreaDoc(file);
+                    }}
+                    style={{ display: 'none' }}
+                  />
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  <span>Nahrajte dokument (PDF/obrázek)</span>
+                </div>
+              ) : (
+                <div className={styles.pdfFileDisplay}>
+                  <div className={styles.pdfFileName}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M11.5 4L5.5 10L2.5 7" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {bjFloorAreaDoc.name}
+                    <button className={styles.pdfRemove} onClick={() => setBjFloorAreaDoc(null)}>✕</button>
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', padding: '0 4px', lineHeight: '1.5' }}>
+                Akceptovatelné podklady: nabývací titul (kupní smlouva), prohlášení vlastníka, vyúčtování služeb, evidenční list SVJ/BD, odhad nemovitosti
+              </div>
+            </div>
+
+            {/* BJ LV Upload */}
+            <div className={styles.pdfSection}>
+              <div className={styles.sectionLabel}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 3H12V12H2V3Z" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M4 1V4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <path d="M10 1V4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <path d="M4 7H10M4 10H7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                List vlastnictví (PDF) — volitelné
+              </div>
+              {!bjLvFile ? (
+                <div className={styles.pdfDropzone} onClick={() => bjLvInputRef.current?.click()}>
+                  <input
+                    ref={bjLvInputRef}
+                    type="file"
+                    accept=".pdf"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) setBjLvFile(file);
+                    }}
+                    style={{ display: 'none' }}
+                  />
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  <span>Klikněte nebo přetáhněte PDF s Listem vlastnictví</span>
+                </div>
+              ) : (
+                <div className={styles.pdfFileDisplay}>
+                  <div className={styles.pdfFileName}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M11.5 4L5.5 10L2.5 7" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {bjLvFile.name}
+                    <button className={styles.pdfRemove} onClick={() => setBjLvFile(null)}>✕</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {error && <div className={styles.error}>{error}</div>}
+
+            <button
+              className="btn btn-primary"
+              onClick={handleBjUpload}
+              disabled={uploading || bjFiles.length === 0}
+              style={{ width: '100%', justifyContent: 'center', padding: '16px', fontSize: '16px' }}
+            >
+              {uploading ? (
+                <>
+                  <span className={styles.spinner} />
+                  Zpracovávám...
+                </>
+              ) : (
+                <>
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M10 4V16M4 10H16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  Nahrát a zpracovat ({bjFiles.length} {bjFiles.length === 1 ? 'soubor' : 'souborů'})
+                </>
+              )}
+            </button>
+          </div>)}
+
           {/* Contract Analysis Mode */}
           {mode === 'contract' && (
             <ContractAnalyzer selectedModel={selectedModel} />
@@ -967,7 +1316,7 @@ export default function Home() {
           agentStatuses={ws.agentStatuses}
           agentLogs={ws.agentLogs}
           isRunning={ws.isRunning}
-          onStart={handleStartPipeline}
+          onStart={mode === 'bj' ? handleStartBjPipeline : handleStartPipeline}
           onEdit={handleEdit}
           uploadData={uploadData}
         />
@@ -990,6 +1339,12 @@ export default function Home() {
             setPdfFile(null);
             setExtractedData(null);
             setManualData({ ...EMPTY_PROPERTY_DATA });
+            // Reset BJ state
+            setBjFiles([]);
+            setBjPdfFile(null);
+            setBjExtractedData(null);
+            setBjFloorAreaDoc(null);
+            setBjLvFile(null);
           }}
         />
         )}

@@ -515,3 +515,160 @@ export async function compareContracts(sessionA: string, sessionB: string, model
 
     return res.json();
 }
+
+
+// ── Bytová jednotka (BJ) Pipeline ────────────────────────────────────────
+
+export interface ApartmentPropertyData {
+    // Žadatel
+    jmeno_prijmeni: string | null;
+    kupni_cena: string | null;
+    // Oceňovaný byt
+    list_vlastnictvi: string | null;
+    katastral_uzemi: string | null;
+    ulice: string | null;
+    cislo_popisne_bytu: string | null;
+    obec: string | null;
+    psc: string | null;
+    // Informace o budově
+    rok_dokonceni_budovy: string | null;
+    rok_rekonstrukce: string | null;
+    konstrukce: string | null;
+    stav_budovy: string | null;
+    vytah: string | null;
+    podlazi_jednotky: string | null;
+    pocet_nadz_podlazi: string | null;
+    pocet_podz_podlazi: string | null;
+    typ_strechy: string | null;
+    obytne_podkrovi: string | null;
+    zatepleni: string | null;
+    typ_oken: string | null;
+    ohrev_vody: string | null;
+    vetrani: string | null;
+    rekuperace: string | null;
+    solarni_panely: string | null;
+    // Byt
+    typ_jednotky: string | null;
+    pocet_garazi: string | null;
+    typ_vytapeni: string | null;
+    plocha_bytu: string | null;
+    plocha_terasy: string | null;
+    plocha_balkonu: string | null;
+    plocha_sklepa: string | null;
+    plocha_zahrady: string | null;
+    stav_bytu: string | null;
+    // Derived
+    adresa: string | null;
+}
+
+/** Human-readable labels for BJ property data fields */
+export const BJ_DATA_LABELS: Record<string, string> = {
+    rok_dokonceni_budovy: "Rok dokončení budovy",
+    rok_rekonstrukce: "Rok rekonstrukce",
+    konstrukce: "Konstrukce",
+    stav_budovy: "Stav budovy",
+    vytah: "Výtah",
+    podlazi_jednotky: "Podlaží jednotky",
+    pocet_nadz_podlazi: "Počet nadzemních podlaží",
+    pocet_podz_podlazi: "Počet podzemních podlaží",
+    typ_strechy: "Typ střechy",
+    obytne_podkrovi: "Obytné podkroví",
+    zatepleni: "Zateplení",
+    typ_oken: "Typ oken",
+    ohrev_vody: "Ohřev vody",
+    vetrani: "Větrání",
+    rekuperace: "Rekuperace",
+    solarni_panely: "Solární panely",
+    typ_jednotky: "Typ jednotky",
+    pocet_garazi: "Počet garáží/stání",
+    typ_vytapeni: "Typ vytápění",
+    plocha_bytu: "Plocha bytu",
+    plocha_terasy: "Plocha terasy",
+    plocha_balkonu: "Plocha balkonu",
+    plocha_sklepa: "Plocha sklepa/skladu",
+    plocha_zahrady: "Plocha zahrady",
+    stav_bytu: "Stav bytu",
+    adresa: "Adresa",
+};
+
+export interface BjUploadResponse {
+    session_id: string;
+    files_uploaded: number;
+    files_processed: number;
+    images: ProcessedImage[];
+    property_data: ApartmentPropertyData | null;
+    lv_data: LVData | null;
+}
+
+export async function parseBjPdf(pdfFile: File): Promise<ApartmentPropertyData | null> {
+    const formData = new FormData();
+    formData.append('pdf_file', pdfFile);
+    const res = await fetch(`${API_BASE}/api/bj/parse-pdf`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.property_data || null;
+}
+
+export async function uploadBjFiles(
+    files: File[],
+    propertyAddress?: string,
+    pdfFile?: File,
+    propertyData?: ApartmentPropertyData,
+    lvPdfFile?: File,
+    floorAreaDoc?: File,
+    selectedParcels?: string[],
+): Promise<BjUploadResponse> {
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    if (propertyAddress) formData.append('property_address', propertyAddress);
+    if (pdfFile) formData.append('pdf_file', pdfFile);
+    if (propertyData) formData.append('property_data_json', JSON.stringify(propertyData));
+    if (lvPdfFile) formData.append('lv_pdf_file', lvPdfFile);
+    if (floorAreaDoc) formData.append('floor_area_doc', floorAreaDoc);
+    if (selectedParcels) formData.append('selected_parcels_json', JSON.stringify(selectedParcels));
+
+    const res = await fetch(`${API_BASE}/api/bj/upload`, {
+        method: 'POST',
+        body: formData,
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(err.detail || 'Upload failed');
+    }
+
+    return res.json();
+}
+
+export async function startBjPipeline(sessionId: string, model: string = "gemini"): Promise<PipelineResult> {
+    const res = await fetch(`${API_BASE}/api/bj/pipeline/start/${sessionId}?model=${model}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'BJ Pipeline start failed' }));
+        throw new Error(err.detail || 'BJ Pipeline start failed');
+    }
+
+    return res.json();
+}
+
+export async function getBjPipelineResults(sessionId: string): Promise<PipelineResult> {
+    const res = await fetch(`${API_BASE}/api/bj/pipeline/results/${sessionId}`);
+    if (!res.ok) throw new Error('BJ results not found');
+    return res.json();
+}
+
+export function getBjWebSocketUrl(sessionId: string): string {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (apiUrl) {
+        const wsUrl = apiUrl.replace(/^http/, 'ws');
+        return `${wsUrl}/ws/bj/pipeline/${sessionId}`;
+    }
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    return `ws://${host}:8000/ws/bj/pipeline/${sessionId}`;
+}

@@ -20,14 +20,14 @@ from config import UPLOAD_DIR
 
 # ── Povinné rozsahy koeficientů (sdílené mezi sanitize i compute) ─────────────
 COEFFICIENT_RANGES = {
-    "k1": (0.85, 0.95),   # Redukce pramene ceny (vždy 0.90 pro inzerci)
-    "k2": (0.50, 2.00),   # Velikost objektu
-    "k3": (0.50, 2.00),   # Poloha
-    "k4": (0.50, 2.00),   # Provedení / vybavení
-    "k5": (0.50, 2.00),   # Celkový stav
-    "k6": (0.50, 2.00),   # Vliv pozemku
-    "k7": (0.50, 2.00),   # Úvaha znalce
-    "k8": (0.50, 2.00),   # Energetická náročnost
+    "k1": (0.85, 0.95),   # Redukce pramene ceny (vždy ~0.90 pro inzerci)
+    "k2": (0.80, 1.20),   # Velikost objektu
+    "k3": (0.80, 1.20),   # Poloha
+    "k4": (0.80, 1.20),   # Provedení / vybavení
+    "k5": (0.80, 1.20),   # Celkový stav
+    "k6": (0.80, 1.20),   # Vliv pozemku
+    "k7": (0.90, 1.10),   # Úvaha znalce (užší rozsah)
+    "k8": (0.90, 1.10),   # Energetická náročnost (užší rozsah)
 }
 
 
@@ -504,16 +504,17 @@ class OdhadceAgent(BaseAgent):
         lon: float | None,
         floor_area_m2: int,
         district_id: int | None,
-        total_count: int = 20,
+        total_count: int = 50,
+        address: str = "",
     ) -> list[dict]:
         """Stáhne vzorky přes Apify actor a seřadí dle GPS vzdálenosti.
 
-        Apify actor prohledává celou ČR, takže nepotřebujeme multi-district logiku.
+        Apify actor prohledává region dle adresy, takže nepotřebujeme multi-district logiku.
         Vzdálenost se počítá z GPS souřadnic, pokud jsou dostupné.
         """
         self.log("Stahuji vzorky z realitních portálů přes Apify...", "thinking")
         samples = await _fetch_apify_samples(
-            lat, lon, floor_area_m2, count=total_count, category="domy"
+            lat, lon, floor_area_m2, count=total_count, category="domy", address=address
         )
         self.log(f"Nalezeno {len(samples)} kandidátů, vracím {min(len(samples), total_count)} nejbližších.", "info")
         return samples[:total_count]

@@ -41,5 +41,9 @@ MIN_INTERIOR_PHOTOS = 3
 MANIPULATION_SCORE_THRESHOLD = 0.7
 CONFIDENCE_THRESHOLD = 0.8
 
+# Agent Thresholds – Strazce BJ (Bytová jednotka)
+BJ_MIN_TOTAL_PHOTOS = 4
+BJ_MAX_PHOTO_AGE_DAYS = 30   # 1 month (vs 90 days for RD)
+
 # Reference year for age calculations
 REFERENCE_YEAR = 2026

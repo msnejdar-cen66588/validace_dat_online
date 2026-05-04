@@ -20,7 +20,9 @@ from fastapi.staticfiles import StaticFiles
 from config import UPLOAD_DIR, SUPPORTED_EXTENSIONS
 from preprocessor import ImagePreprocessor
 from orchestrator import PipelineOrchestrator
+from orchestrator_bj import BJPipelineOrchestrator
 from pdf_parser import parse_pdf
+from pdf_parser_bj import parse_bj_pdf, is_bj_pdf
 from lv_parser import parse_lv
 from agents.odhadce import OdhadceAgent
 from report_generator import ReportGenerator
@@ -55,6 +57,11 @@ global_websockets: dict[str, list[WebSocket]] = {}
 # Batch session store
 batch_sessions: dict[str, BatchSession] = {}
 batch_websockets: dict[str, list[WebSocket]] = {}
+
+# BJ (bytová jednotka) session store
+bj_sessions: dict[str, dict] = {}
+bj_orchestrators: dict[str, BJPipelineOrchestrator] = {}
+bj_websockets: dict[str, list[WebSocket]] = {}
 
 
 def _evict_old_sessions(keep_id: str = ""):
@@ -1022,6 +1029,345 @@ async def get_contract_pdf(session_id: str):
     if os.path.exists(pdf_path):
         return FileResponse(pdf_path, media_type="application/pdf")
     raise HTTPException(status_code=404, detail="PDF not found.")
+
+
+# ── Bytová jednotka (BJ) Pipeline Endpoints ─────────────────────────────
+
+
+def _evict_bj_sessions(keep_id: str = ""):
+    """Evict oldest BJ sessions when we exceed MAX_SESSIONS."""
+    if len(bj_sessions) <= MAX_SESSIONS:
+        return
+    session_ids = [sid for sid in bj_sessions if sid != keep_id]
+    while len(bj_sessions) > MAX_SESSIONS and session_ids:
+        old_id = session_ids.pop(0)
+        bj_sessions.pop(old_id, None)
+        bj_orchestrators.pop(old_id, None)
+        bj_websockets.pop(old_id, None)
+        old_dir = os.path.join(UPLOAD_DIR, old_id)
+        if os.path.exists(old_dir):
+            shutil.rmtree(old_dir, ignore_errors=True)
+        print(f"[Memory] Evicted old BJ session: {old_id}")
+    gc.collect()
+
+
+@app.post("/api/bj/parse-pdf")
+async def parse_bj_pdf_endpoint(pdf_file: UploadFile = File(...)):
+    """Parse a BJ PDF form and return extracted apartment data."""
+    if not pdf_file.filename or not pdf_file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Soubor musí být ve formátu PDF.")
+
+    pdf_bytes = await pdf_file.read()
+    try:
+        parsed = parse_bj_pdf(pdf_bytes)
+        return {"property_data": parsed.to_dict() if not parsed.is_empty() else None}
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Nepodařilo se zpracovat BJ PDF: {str(e)}")
+
+
+@app.post("/api/bj/upload")
+async def upload_bj_files(
+    files: list[UploadFile] = File(...),
+    property_address: Optional[str] = Form(None),
+    pdf_file: Optional[UploadFile] = File(None),
+    lv_pdf_file: Optional[UploadFile] = File(None),
+    floor_area_doc: Optional[UploadFile] = File(None),
+    property_data_json: Optional[str] = Form(None),
+    selected_parcels_json: Optional[str] = Form(None),
+):
+    """Upload and preprocess images for BJ pipeline, with optional floor area document."""
+    session_id = str(uuid.uuid4())[:8]
+    _evict_bj_sessions(keep_id=session_id)
+
+    # === Handle BJ PDF file ===
+    property_data = None
+
+    if pdf_file and pdf_file.filename:
+        ext = os.path.splitext(pdf_file.filename)[1].lower()
+        if ext == ".pdf":
+            pdf_bytes = await pdf_file.read()
+            parsed = await asyncio.to_thread(parse_bj_pdf, pdf_bytes)
+            if not parsed.is_empty():
+                property_data = parsed.to_dict()
+
+            session_dir = os.path.join(UPLOAD_DIR, session_id)
+            os.makedirs(session_dir, exist_ok=True)
+            pdf_path = os.path.join(session_dir, "formular_bj.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_bytes)
+            del pdf_bytes
+            gc.collect()
+
+    # === Handle manual property data ===
+    if not property_data and property_data_json:
+        try:
+            property_data = json.loads(property_data_json)
+        except json.JSONDecodeError:
+            pass
+
+    # === Handle LV PDF ===
+    lv_pdf_path = None
+    lv_data_preview = None
+    if lv_pdf_file and lv_pdf_file.filename:
+        ext = os.path.splitext(lv_pdf_file.filename)[1].lower()
+        if ext == ".pdf":
+            lv_bytes = await lv_pdf_file.read()
+            session_dir = os.path.join(UPLOAD_DIR, session_id)
+            os.makedirs(session_dir, exist_ok=True)
+            lv_pdf_path = os.path.join(session_dir, "lv.pdf")
+            with open(lv_pdf_path, "wb") as f:
+                f.write(lv_bytes)
+            try:
+                lv_parsed = await asyncio.to_thread(parse_lv, lv_bytes)
+                lv_data_preview = lv_parsed.to_dict()
+            except Exception:
+                pass
+            del lv_bytes
+            gc.collect()
+
+    # === Handle floor area document ===
+    floor_area_doc_path = None
+    if floor_area_doc and floor_area_doc.filename:
+        session_dir = os.path.join(UPLOAD_DIR, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        ext = os.path.splitext(floor_area_doc.filename)[1].lower()
+        doc_filename = f"floor_area_doc{ext}"
+        floor_area_doc_path = os.path.join(session_dir, doc_filename)
+        doc_bytes = await floor_area_doc.read()
+        with open(floor_area_doc_path, "wb") as f:
+            f.write(doc_bytes)
+        del doc_bytes
+        gc.collect()
+
+    # Parse selected parcels
+    selected_parcels = None
+    if selected_parcels_json:
+        try:
+            selected_parcels = json.loads(selected_parcels_json)
+        except json.JSONDecodeError:
+            pass
+
+    # === Process image files ===
+    preprocessor = ImagePreprocessor(session_id)
+    processed = []
+
+    tasks = []
+
+    async def flush_tasks():
+        if tasks:
+            processed_results = await asyncio.gather(*tasks)
+            processed.extend(processed_results)
+            tasks.clear()
+            gc.collect()
+
+    async def _process_file_to_thread(filename, fbytes):
+        res = await preprocessor.process_file(filename, fbytes)
+        return res
+
+    has_pdf_photos = False
+    for f in files:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext in SUPPORTED_EXTENSIONS:
+            file_bytes = await f.read()
+            if len(file_bytes) > 15_000_000:
+                continue
+            tasks.append(_process_file_to_thread(f.filename or "unknown", file_bytes))
+            if len(tasks) >= 3:
+                await flush_tasks()
+        elif ext == ".pdf":
+            file_bytes = await f.read()
+            try:
+                reader = PdfReader(io.BytesIO(file_bytes))
+                pdf_img_count = 0
+                for page_num, page in enumerate(reader.pages):
+                    for img_index, image_file_object in enumerate(page.images):
+                        if pdf_img_count >= 4:
+                            break
+                        image_bytes = image_file_object.data
+                        image_name = image_file_object.name
+                        image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
+                        normalized_ext = f".{image_ext.lower()}".replace(".jpeg", ".jpg")
+                        if normalized_ext in SUPPORTED_EXTENSIONS or image_ext.lower() in ("jpeg", "jpg", "png", "webp"):
+                            img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
+                            has_pdf_photos = True
+                            tasks.append(_process_file_to_thread(img_filename, image_bytes))
+                            pdf_img_count += 1
+                            if len(tasks) >= 2:
+                                await flush_tasks()
+                    if pdf_img_count >= 4:
+                        break
+                del reader, file_bytes
+                gc.collect()
+            except Exception as e:
+                print(f"Error extracting photos from PDF (BJ): {e}")
+
+    await flush_tasks()
+
+    if not processed:
+        raise HTTPException(status_code=400, detail="No valid image files uploaded.")
+
+    # Effective address
+    effective_address = property_address
+    if not effective_address and property_data:
+        effective_address = property_data.get("adresa", "")
+
+    # Effective year built
+    effective_year_built = None
+    if property_data:
+        try:
+            effective_year_built = int(property_data.get("rok_dokonceni_budovy", "") or "0") or None
+        except (ValueError, TypeError):
+            pass
+
+    # Store BJ session data
+    bj_sessions[session_id] = {
+        "session_id": session_id,
+        "pipeline_type": "bj",
+        "images": [img.to_dict() for img in processed],
+        "year_built": effective_year_built,
+        "property_address": effective_address,
+        "property_data": property_data,
+        "processed_paths": [img.processed_path for img in processed],
+        "lv_pdf_path": lv_pdf_path,
+        "floor_area_doc_path": floor_area_doc_path,
+        "selected_parcels": selected_parcels,
+        "has_pdf_photos": has_pdf_photos,
+    }
+
+    return {
+        "session_id": session_id,
+        "files_uploaded": len(processed),
+        "files_processed": len(processed),
+        "images": [img.to_dict() for img in processed],
+        "property_data": property_data,
+        "lv_data": lv_data_preview,
+    }
+
+
+@app.post("/api/bj/pipeline/start/{session_id}")
+async def start_bj_pipeline(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    custom_prompts: Optional[dict] = None,
+    model: str = "gemini-3-flash-preview"
+):
+    """Starts the BJ validation pipeline in the background."""
+    if session_id not in bj_sessions:
+        raise HTTPException(status_code=404, detail="BJ session not found.")
+
+    session = bj_sessions[session_id]
+    session["model"] = model
+
+    orchestrator = BJPipelineOrchestrator(session_id, model_name=model)
+    bj_orchestrators[session_id] = orchestrator
+
+    if session_id in bj_websockets:
+        for ws in bj_websockets[session_id]:
+            if ws not in orchestrator.active_connections:
+                orchestrator.active_connections.append(ws)
+
+    context = {
+        "session_id": session_id,
+        "images": session["images"],
+        "year_built": session.get("year_built"),
+        "property_address": session.get("property_address", ""),
+        "property_data": session.get("property_data"),
+        "lv_pdf_path": session.get("lv_pdf_path"),
+        "floor_area_doc_path": session.get("floor_area_doc_path"),
+        "selected_parcels": session.get("selected_parcels"),
+        "has_pdf_photos": session.get("has_pdf_photos", False),
+        "custom_prompts": custom_prompts or {},
+    }
+
+    async def run_and_store():
+        try:
+            result = await orchestrator.run_pipeline(context)
+            result["property_data"] = session.get("property_data")
+            result["property_address"] = session.get("property_address")
+            bj_sessions[session_id]["result"] = result
+        except Exception as e:
+            print(f"BJ Pipeline error for session {session_id}: {e}")
+        finally:
+            bj_orchestrators.pop(session_id, None)
+            gc.collect()
+            print(f"[Memory] BJ Orchestrator freed for session {session_id}")
+
+    background_tasks.add_task(run_and_store)
+
+    return {
+        "status": "started",
+        "message": "BJ Pipeline runs in the background. Use WebSocket for updates.",
+        "pipeline_id": orchestrator.pipeline_id,
+        "session_id": session_id,
+    }
+
+
+@app.get("/api/bj/pipeline/results/{session_id}")
+async def get_bj_results(session_id: str):
+    """Get BJ pipeline results."""
+    if session_id not in bj_sessions:
+        raise HTTPException(status_code=404, detail="BJ session not found.")
+
+    session = bj_sessions[session_id]
+    result = session.get("result")
+
+    if not result:
+        orchestrator = bj_orchestrators.get(session_id)
+        return {
+            "completed": False,
+            "is_running": orchestrator.is_running if orchestrator else False,
+        }
+
+    return {"completed": True, **result}
+
+
+@app.get("/api/bj/pipeline/state/{session_id}")
+async def get_bj_pipeline_state(session_id: str):
+    """Get current BJ pipeline state."""
+    orchestrator = bj_orchestrators.get(session_id)
+    if not orchestrator:
+        raise HTTPException(status_code=404, detail="No active BJ pipeline for this session.")
+
+    state = orchestrator.get_state()
+    if session_id in bj_sessions:
+        state["property_data"] = bj_sessions[session_id].get("property_data")
+        state["property_address"] = bj_sessions[session_id].get("property_address")
+    return state
+
+
+@app.websocket("/ws/bj/pipeline/{session_id}")
+async def bj_websocket_endpoint(websocket: WebSocket, session_id: str):
+    """WebSocket for real-time BJ pipeline updates."""
+    await websocket.accept()
+
+    if session_id not in bj_websockets:
+        bj_websockets[session_id] = []
+    bj_websockets[session_id].append(websocket)
+
+    orchestrator = bj_orchestrators.get(session_id)
+    if orchestrator and websocket not in orchestrator.active_connections:
+        orchestrator.active_connections.append(websocket)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            msg = json.loads(data)
+
+            if msg.get("type") == "update_prompt":
+                agent_name = msg.get("agent")
+                new_prompt = msg.get("prompt")
+                if orchestrator and agent_name in orchestrator.agents:
+                    orchestrator.agents[agent_name].system_prompt = new_prompt
+                    await websocket.send_json({
+                        "type": "prompt_updated",
+                        "agent": agent_name,
+                    })
+
+    except WebSocketDisconnect:
+        if session_id in bj_websockets and websocket in bj_websockets[session_id]:
+            bj_websockets[session_id].remove(websocket)
+        if orchestrator and websocket in orchestrator.active_connections:
+            orchestrator.active_connections.remove(websocket)
 
 
 # Serve uploaded/processed images (panorama, etc.)
