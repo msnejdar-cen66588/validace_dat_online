@@ -1071,7 +1071,7 @@ async def upload_bj_files(
     property_address: Optional[str] = Form(None),
     pdf_file: Optional[UploadFile] = File(None),
     lv_pdf_file: Optional[UploadFile] = File(None),
-    floor_area_doc: Optional[UploadFile] = File(None),
+    floor_area_docs: list[UploadFile] = File([]),
     property_data_json: Optional[str] = Form(None),
     selected_parcels_json: Optional[str] = Form(None),
 ):
@@ -1125,18 +1125,21 @@ async def upload_bj_files(
             del lv_bytes
             gc.collect()
 
-    # === Handle floor area document ===
-    floor_area_doc_path = None
-    if floor_area_doc and floor_area_doc.filename:
+    # === Handle floor area documents (multiple) ===
+    floor_area_doc_paths = []
+    if floor_area_docs:
         session_dir = os.path.join(UPLOAD_DIR, session_id)
         os.makedirs(session_dir, exist_ok=True)
-        ext = os.path.splitext(floor_area_doc.filename)[1].lower()
-        doc_filename = f"floor_area_doc{ext}"
-        floor_area_doc_path = os.path.join(session_dir, doc_filename)
-        doc_bytes = await floor_area_doc.read()
-        with open(floor_area_doc_path, "wb") as f:
-            f.write(doc_bytes)
-        del doc_bytes
+        for idx, doc in enumerate(floor_area_docs):
+            if doc and doc.filename:
+                ext = os.path.splitext(doc.filename)[1].lower()
+                doc_filename = f"floor_area_doc_{idx}{ext}"
+                doc_path = os.path.join(session_dir, doc_filename)
+                doc_bytes = await doc.read()
+                with open(doc_path, "wb") as f:
+                    f.write(doc_bytes)
+                floor_area_doc_paths.append(doc_path)
+                del doc_bytes
         gc.collect()
 
     # Parse selected parcels
@@ -1229,7 +1232,7 @@ async def upload_bj_files(
         "property_data": property_data,
         "processed_paths": [img.processed_path for img in processed],
         "lv_pdf_path": lv_pdf_path,
-        "floor_area_doc_path": floor_area_doc_path,
+        "floor_area_doc_paths": floor_area_doc_paths,
         "selected_parcels": selected_parcels,
         "has_pdf_photos": has_pdf_photos,
     }
@@ -1273,7 +1276,7 @@ async def start_bj_pipeline(
         "property_address": session.get("property_address", ""),
         "property_data": session.get("property_data"),
         "lv_pdf_path": session.get("lv_pdf_path"),
-        "floor_area_doc_path": session.get("floor_area_doc_path"),
+        "floor_area_doc_paths": session.get("floor_area_doc_paths", []),
         "selected_parcels": session.get("selected_parcels"),
         "has_pdf_photos": session.get("has_pdf_photos", False),
         "custom_prompts": custom_prompts or {},

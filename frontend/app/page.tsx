@@ -90,7 +90,7 @@ export default function Home() {
   const [bjFiles, setBjFiles] = useState<File[]>([]);
   const [bjPdfFile, setBjPdfFile] = useState<File | null>(null);
   const [bjExtractedData, setBjExtractedData] = useState<ApartmentPropertyData | null>(null);
-  const [bjFloorAreaDoc, setBjFloorAreaDoc] = useState<File | null>(null);
+  const [bjFloorAreaDocs, setBjFloorAreaDocs] = useState<File[]>([]);
   const [bjLvFile, setBjLvFile] = useState<File | null>(null);
   const [bjDragActive, setBjDragActive] = useState(false);
   const [bjPdfParsing, setBjPdfParsing] = useState(false);
@@ -370,7 +370,7 @@ export default function Home() {
         bjPdfFile || undefined,
         bjExtractedData || undefined,
         bjLvFile || undefined,
-        bjFloorAreaDoc || undefined,
+        bjFloorAreaDocs.length > 0 ? bjFloorAreaDocs : undefined,
       );
       setUploadData(result as any);
       setSessionId(result.session_id);
@@ -1092,15 +1092,21 @@ export default function Home() {
               <div className={styles.fileList}>
                 <div className={styles.fileListHeader}>
                   <span>📸 {bjFiles.length} {bjFiles.length === 1 ? 'fotografie' : 'fotografií'}</span>
-                  <button className={styles.clearFiles} onClick={() => setBjFiles([])}>
+                  <button className={styles.clearBtn} onClick={() => setBjFiles([])}>
                     Vymazat vše
                   </button>
                 </div>
                 <div className={styles.fileGrid}>
                   {bjFiles.map((f, i) => (
                     <div key={i} className={styles.fileItem}>
-                      <span className={styles.fileName}>{f.name}</span>
-                      <button className={styles.removeFile} onClick={() => setBjFiles(prev => prev.filter((_, idx) => idx !== i))}>✕</button>
+                      <div className={styles.fileThumb}>
+                        <img src={URL.createObjectURL(f)} alt={f.name} />
+                      </div>
+                      <div className={styles.fileInfo}>
+                        <span className={styles.fileName}>{f.name}</span>
+                        <span className={styles.fileSize}>{(f.size / 1024 / 1024).toFixed(1)} MB</span>
+                      </div>
+                      <button className={styles.fileRemove} onClick={(e) => { e.stopPropagation(); setBjFiles(prev => prev.filter((_, idx) => idx !== i)); }}>✕</button>
                     </div>
                   ))}
                 </div>
@@ -1186,46 +1192,56 @@ export default function Home() {
               </div>
             )}
 
-            {/* Floor Area Document Upload */}
+            {/* Floor Area Document Upload – multiple files */}
             <div className={styles.pdfSection}>
               <div className={styles.sectionLabel}>
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <rect x="2" y="2" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.5" />
                   <path d="M5 5H9M5 7H9M5 9H7" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
                 </svg>
-                Dokument potvrzující podlahovou plochu
+                Dokumenty potvrzující podlahovou plochu
               </div>
-              {!bjFloorAreaDoc ? (
-                <div
-                  className={styles.pdfDropzone}
-                  onClick={() => bjFloorDocInputRef.current?.click()}
-                >
-                  <input
-                    ref={bjFloorDocInputRef}
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) setBjFloorAreaDoc(file);
-                    }}
-                    style={{ display: 'none' }}
-                  />
-                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                    <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                  <span>Nahrajte dokument (PDF/obrázek)</span>
-                </div>
-              ) : (
-                <div className={styles.pdfFileDisplay}>
-                  <div className={styles.pdfFileName}>
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M11.5 4L5.5 10L2.5 7" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    {bjFloorAreaDoc.name}
-                    <button className={styles.pdfRemove} onClick={() => setBjFloorAreaDoc(null)}>✕</button>
-                  </div>
+
+              <div
+                className={styles.pdfDropzone}
+                onClick={() => bjFloorDocInputRef.current?.click()}
+              >
+                <input
+                  ref={bjFloorDocInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      setBjFloorAreaDocs(prev => [...prev, ...Array.from(e.target.files!)]);
+                      e.target.value = '';
+                    }
+                  }}
+                  style={{ display: 'none' }}
+                />
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>Klikněte pro nahrání dokumentů (PDF/obrázek) — lze vybrat více najednou</span>
+              </div>
+
+              {bjFloorAreaDocs.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+                  {bjFloorAreaDocs.map((doc, i) => (
+                    <div key={i} className={styles.pdfFileDisplay}>
+                      <div className={styles.pdfFileName}>
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <path d="M11.5 4L5.5 10L2.5 7" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {doc.name}
+                        <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '4px' }}>({(doc.size / 1024 / 1024).toFixed(1)} MB)</span>
+                        <button className={styles.pdfRemove} onClick={() => setBjFloorAreaDocs(prev => prev.filter((_, idx) => idx !== i))}>✕</button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
+
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', padding: '0 4px', lineHeight: '1.5' }}>
                 Akceptovatelné podklady: nabývací titul (kupní smlouva), prohlášení vlastníka, vyúčtování služeb, evidenční list SVJ/BD, odhad nemovitosti
               </div>
@@ -1343,7 +1359,7 @@ export default function Home() {
             setBjFiles([]);
             setBjPdfFile(null);
             setBjExtractedData(null);
-            setBjFloorAreaDoc(null);
+            setBjFloorAreaDocs([]);
             setBjLvFile(null);
           }}
         />

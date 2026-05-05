@@ -170,7 +170,7 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
     async def run(self, context: dict) -> AgentResult:
         property_data = context.get("property_data")
         images = context.get("images", [])
-        floor_area_doc_path = context.get("floor_area_doc_path")
+        floor_area_doc_paths = context.get("floor_area_doc_paths", [])
 
         # Skip if no property data provided
         if not property_data:
@@ -281,76 +281,79 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
             recommendations = ai_result.get("recommendations", [])
             overall_summary = ai_result.get("overall_summary", "")
 
-            # ── Floor area document validation ──
-            floor_area_result = None
-            if floor_area_doc_path:
-                self.log("Ověřuji dokument podlahové plochy...", "thinking")
-                floor_area_result = await self._validate_floor_area_doc(
-                    floor_area_doc_path, property_data
-                )
-                if floor_area_result:
-                    # Add floor area check to checks list
-                    declared_area = property_data.get("plocha_bytu", "neznámo")
-                    extracted = floor_area_result.get("extracted_floor_area_m2")
-                    doc_type = floor_area_result.get("document_type", "neznámý")
-                    is_acceptable = floor_area_result.get("is_acceptable", False)
+            # ── Floor area document validation (multiple docs) ──
+            floor_area_results = []
+            if floor_area_doc_paths and len(floor_area_doc_paths) > 0:
+                self.log(f"Ověřuji {len(floor_area_doc_paths)} dokument(ů) podlahové plochy...", "thinking")
+                for doc_idx, doc_path in enumerate(floor_area_doc_paths):
+                    self.log(f"  Dokument {doc_idx + 1}/{len(floor_area_doc_paths)}: {doc_path}")
+                    floor_area_result = await self._validate_floor_area_doc(
+                        doc_path, property_data
+                    )
+                    if floor_area_result:
+                        floor_area_results.append(floor_area_result)
+                        # Add floor area check to checks list
+                        declared_area = property_data.get("plocha_bytu", "neznámo")
+                        extracted = floor_area_result.get("extracted_floor_area_m2")
+                        doc_type = floor_area_result.get("document_type", "neznámý")
+                        is_acceptable = floor_area_result.get("is_acceptable", False)
+                        doc_label = f"dokument podlahové plochy č.{doc_idx + 1}" if len(floor_area_doc_paths) > 1 else "dokument podlahové plochy"
 
-                    if not is_acceptable:
-                        checks.append({
-                            "field": "dokument podlahové plochy",
-                            "declared": declared_area,
-                            "observed": f"Typ dokumentu: {doc_type} – neakceptovatelný",
-                            "match": False,
-                            "note": floor_area_result.get("notes", ""),
-                        })
-                        ai_warnings.append(
-                            f"Dokument podlahové plochy je typu '{doc_type}', "
-                            "což není akceptovatelný podklad."
-                        )
-                    elif extracted is not None:
-                        # Compare extracted area with declared area
-                        try:
-                            declared_num = float(
-                                str(declared_area).replace("m²", "").replace("m2", "").strip()
+                        if not is_acceptable:
+                            checks.append({
+                                "field": doc_label,
+                                "declared": declared_area,
+                                "observed": f"Typ dokumentu: {doc_type} – neakceptovatelný",
+                                "match": False,
+                                "note": floor_area_result.get("notes", ""),
+                            })
+                            ai_warnings.append(
+                                f"Dokument č.{doc_idx + 1} ({doc_type}) "
+                                "není akceptovatelný podklad."
                             )
-                            diff_pct = abs(extracted - declared_num) / declared_num * 100 if declared_num > 0 else 999
-                            area_match = diff_pct <= 10  # 10% tolerance for document
-                            checks.append({
-                                "field": "dokument podlahové plochy",
-                                "declared": declared_area,
-                                "observed": f"{extracted} m² (z {doc_type})",
-                                "match": area_match,
-                                "note": (
-                                    f"Plocha z dokumentu: {extracted} m², deklarovaná: {declared_num} m². "
-                                    f"Odchylka: {diff_pct:.0f} %."
-                                ),
-                            })
-                            if not area_match:
-                                ai_warnings.append(
-                                    f"Plocha z dokumentu ({extracted} m²) se neshoduje "
-                                    f"s deklarovanou plochou ({declared_num} m²) – odchylka {diff_pct:.0f} %."
+                        elif extracted is not None:
+                            try:
+                                declared_num = float(
+                                    str(declared_area).replace("m²", "").replace("m2", "").strip()
                                 )
-                        except (ValueError, TypeError):
+                                diff_pct = abs(extracted - declared_num) / declared_num * 100 if declared_num > 0 else 999
+                                area_match = diff_pct <= 10
+                                checks.append({
+                                    "field": doc_label,
+                                    "declared": declared_area,
+                                    "observed": f"{extracted} m² (z {doc_type})",
+                                    "match": area_match,
+                                    "note": (
+                                        f"Plocha z dokumentu: {extracted} m², deklarovaná: {declared_num} m². "
+                                        f"Odchylka: {diff_pct:.0f} %."
+                                    ),
+                                })
+                                if not area_match:
+                                    ai_warnings.append(
+                                        f"Dokument č.{doc_idx + 1}: plocha ({extracted} m²) se neshoduje "
+                                        f"s deklarovanou ({declared_num} m²) – odchylka {diff_pct:.0f} %."
+                                    )
+                            except (ValueError, TypeError):
+                                checks.append({
+                                    "field": doc_label,
+                                    "declared": declared_area,
+                                    "observed": f"{extracted} m² (z {doc_type})",
+                                    "match": True,
+                                    "note": "Nelze numericky porovnat s deklarovanou plochou.",
+                                })
+                        else:
                             checks.append({
-                                "field": "dokument podlahové plochy",
+                                "field": doc_label,
                                 "declared": declared_area,
-                                "observed": f"{extracted} m² (z {doc_type})",
-                                "match": True,
-                                "note": "Nelze numericky porovnat s deklarovanou plochou.",
+                                "observed": f"Typ: {doc_type} – plocha nebyla nalezena v dokumentu",
+                                "match": False,
+                                "note": floor_area_result.get("notes", ""),
                             })
-                    else:
-                        checks.append({
-                            "field": "dokument podlahové plochy",
-                            "declared": declared_area,
-                            "observed": f"Typ: {doc_type} – plocha nebyla nalezena v dokumentu",
-                            "match": False,
-                            "note": floor_area_result.get("notes", ""),
-                        })
-                        ai_warnings.append(
-                            "V nahraném dokumentu se nepodařilo najít podlahovou plochu."
-                        )
+                            ai_warnings.append(
+                                f"V dokumentu č.{doc_idx + 1} se nepodařilo najít podlahovou plochu."
+                            )
             else:
-                # No floor area doc uploaded
+                # No floor area docs uploaded
                 ai_warnings.append(
                     "Nebyl nahrán dokument potvrzující podlahovou plochu jednotky."
                 )
@@ -387,7 +390,7 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                     "checks": checks,
                     "recommendations": recommendations,
                     "property_data": property_data,
-                    "floor_area_result": floor_area_result,
+                    "floor_area_results": floor_area_results,
                 },
                 warnings=ai_warnings,
             )

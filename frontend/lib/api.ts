@@ -618,7 +618,7 @@ export async function uploadBjFiles(
     pdfFile?: File,
     propertyData?: ApartmentPropertyData,
     lvPdfFile?: File,
-    floorAreaDoc?: File,
+    floorAreaDocs?: File[],
     selectedParcels?: string[],
 ): Promise<BjUploadResponse> {
     const formData = new FormData();
@@ -627,7 +627,7 @@ export async function uploadBjFiles(
     if (pdfFile) formData.append('pdf_file', pdfFile);
     if (propertyData) formData.append('property_data_json', JSON.stringify(propertyData));
     if (lvPdfFile) formData.append('lv_pdf_file', lvPdfFile);
-    if (floorAreaDoc) formData.append('floor_area_doc', floorAreaDoc);
+    if (floorAreaDocs) floorAreaDocs.forEach(doc => formData.append('floor_area_docs', doc));
     if (selectedParcels) formData.append('selected_parcels_json', JSON.stringify(selectedParcels));
 
     const res = await fetch(`${API_BASE}/api/bj/upload`, {
