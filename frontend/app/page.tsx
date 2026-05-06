@@ -1202,25 +1202,24 @@ export default function Home() {
                 Dokumenty potvrzující podlahovou plochu
               </div>
 
+              <input
+                ref={bjFloorDocInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={(e) => {
+                  const fileList = e.target.files;
+                  if (fileList && fileList.length > 0) {
+                    setBjFloorAreaDocs(prev => [...prev, ...Array.from(fileList)]);
+                  }
+                  e.target.value = '';
+                }}
+                style={{ display: 'none' }}
+              />
               <div
                 className={styles.pdfDropzone}
                 onClick={() => bjFloorDocInputRef.current?.click()}
               >
-                <input
-                  ref={bjFloorDocInputRef}
-                  type="file"
-                  multiple
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => {
-                    const fileList = e.target.files;
-                    if (fileList && fileList.length > 0) {
-                      setBjFloorAreaDocs(prev => [...prev, ...Array.from(fileList)]);
-                    }
-                    e.target.value = '';
-                  }}
-                  style={{ display: 'none' }}
-                />
                 <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
                   <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
                 </svg>
