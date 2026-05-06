@@ -88,26 +88,47 @@ class StrategBJAgent(BaseAgent):
 
         self.log(f"Agregace {len(agent_results)} agentů pro bytovou jednotku...", "thinking")
 
-        # ── Collect agent summaries ──
+        # ── Collect agent summaries (trimmed — no full details to avoid payload bloat) ──
         agent_summaries = {}
         for name, result in agent_results.items():
             if hasattr(result, 'status'):
+                # Extract only key fields from details to keep the payload manageable
+                trimmed_details = {}
+                if hasattr(result, 'details') and isinstance(result.details, dict):
+                    for key in ("verdict", "confidence", "semaphore", "semaphore_color",
+                                "effective_age", "category", "overall_summary",
+                                "suitability_verdict", "total_photos", "are_photos_current",
+                                "missing_categories", "visual_score"):
+                        if key in result.details:
+                            trimmed_details[key] = result.details[key]
+
                 agent_summaries[name] = {
                     "status": result.status.value,
                     "summary": result.summary,
-                    "warnings": result.warnings,
-                    "errors": result.errors,
-                    "details": result.details if hasattr(result, 'details') else {},
+                    "warnings": result.warnings[:5] if result.warnings else [],
+                    "errors": result.errors[:3] if result.errors else [],
+                    "key_details": trimmed_details,
                 }
             elif isinstance(result, dict):
-                agent_summaries[name] = result
+                agent_summaries[name] = {
+                    "status": result.get("status", "unknown"),
+                    "summary": result.get("summary", ""),
+                    "warnings": (result.get("warnings") or [])[:5],
+                    "errors": (result.get("errors") or [])[:3],
+                }
 
         if not self.client:
             self.log("API key not configured, using rule-based fallback.", "warn")
             return self._rule_based_decision(agent_summaries, property_data)
 
         try:
-            # Build context for Strateg
+            # Build context for Strateg — safe serialization
+            def _safe_default(obj):
+                try:
+                    return str(obj)
+                except Exception:
+                    return "<non-serializable>"
+
             context_text = json.dumps(
                 {
                     "agent_results": agent_summaries,
@@ -115,7 +136,13 @@ class StrategBJAgent(BaseAgent):
                 },
                 ensure_ascii=False,
                 indent=2,
+                default=_safe_default,
             )
+
+            # Truncate if excessively large (>30k chars) to avoid LLM token limits
+            if len(context_text) > 30000:
+                context_text = context_text[:30000] + "\n... (zkráceno)"
+                self.log("Kontext zkrácen na 30k znaků", "warn")
 
             response_text = await self.client.generate_content(
                 system_instruction=self.system_prompt,
