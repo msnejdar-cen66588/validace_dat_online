@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getWebSocketUrl, getPipelineResults } from '@/lib/api';
+import { getWebSocketUrl, getBjWebSocketUrl, getPipelineResults, getBjPipelineResults } from '@/lib/api';
 
 export interface WSMessage {
     type: string;
@@ -20,7 +20,7 @@ const MAX_RECONNECT_ATTEMPTS = 8;
 const RECONNECT_BASE_DELAY = 3000;
 const POLL_INTERVAL = 15000; // 15 seconds — gentle on Render
 
-export function useWebSocket(sessionId: string | null) {
+export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj' = 'rd') {
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectCount = useRef(0);
     const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -42,7 +42,9 @@ export function useWebSocket(sessionId: string | null) {
         console.log('[Pipeline] WebSocket unavailable, falling back to HTTP polling every 15s');
         pollTimer.current = setInterval(async () => {
             try {
-                const result: any = await getPipelineResults(sessionId);
+                const result: any = pipelineType === 'bj'
+                    ? await getBjPipelineResults(sessionId)
+                    : await getPipelineResults(sessionId);
                 // Only accept truly completed results
                 if (result && result.completed && result.semaphore) {
                     console.log('[Pipeline] Got completed result via polling');
@@ -79,7 +81,10 @@ export function useWebSocket(sessionId: string | null) {
             try { wsRef.current.close(); } catch { /* ignore */ }
         }
 
-        const ws = new WebSocket(getWebSocketUrl(sessionId));
+        const wsUrl = pipelineType === 'bj'
+            ? getBjWebSocketUrl(sessionId)
+            : getWebSocketUrl(sessionId);
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {

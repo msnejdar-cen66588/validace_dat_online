@@ -99,7 +99,7 @@ export default function Home() {
   const bjFloorDocInputRef = useRef<HTMLInputElement>(null);
   const bjLvInputRef = useRef<HTMLInputElement>(null);
 
-  const ws = useWebSocket(sessionId);
+  const ws = useWebSocket(sessionId, mode === 'bj' ? 'bj' : 'rd');
   const batchWs = useBatchWebSocket(batchId);
 
   const handleFiles = useCallback((newFiles: FileList | File[]) => {
