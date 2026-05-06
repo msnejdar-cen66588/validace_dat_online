@@ -16,6 +16,7 @@ interface Props {
 }
 
 const AGENT_META: Record<string, { icon: string; label: string; color: string }> = {
+    // RD agents
     Strazce: { icon: '🛡️', label: 'Fotodokumentace', color: '#3b82f6' },
     ForenzniAnalytik: { icon: '🔬', label: 'Autenticita fotek', color: '#8b5cf6' },
     Historik: { icon: '📜', label: 'Věk nemovitosti', color: '#06b6d4' },
@@ -24,7 +25,15 @@ const AGENT_META: Record<string, { icon: string; label: string; color: string }>
     PorovnavacDokumentu: { icon: '📄', label: 'PDF vs Fotky', color: '#f97316' },
     KatastralniAnalytik: { icon: '🏛️', label: 'Katastr & LV', color: '#7c3aed' },
     Strateg: { icon: '🎯', label: 'Závěrečné hodnocení', color: '#10b981' },
+    // BJ agents
+    StrazceBJ: { icon: '🛡️', label: 'Fotodokumentace bytu', color: '#3b82f6' },
+    InspektorBJ: { icon: '🔍', label: 'Technický stav bytu', color: '#f59e0b' },
+    PorovnavacDokumentuBJ: { icon: '📄', label: 'PDF vs Fotky (BJ)', color: '#f97316' },
+    StrategBJ: { icon: '🎯', label: 'Závěrečné hodnocení', color: '#10b981' },
 };
+
+const RD_AGENT_LIST = ['Strazce', 'Inspektor', 'ForenzniAnalytik', 'Historik', 'GeoValidator', 'PorovnavacDokumentu', 'KatastralniAnalytik'];
+const BJ_AGENT_LIST = ['StrazceBJ', 'InspektorBJ', 'ForenzniAnalytik', 'Historik', 'GeoValidator', 'PorovnavacDokumentuBJ', 'KatastralniAnalytik'];
 
 // ── Leaflet Map Component (loads from CDN to avoid SSR issues) ──
 function ValuationMap({ propertyGps, samples }: { propertyGps: { lat: number; lon: number }; samples: any[] }) {
@@ -315,8 +324,13 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
     const semaphoreColor = result.semaphore_color || 'gray';
     const finalCategory = result.final_category;
     const agents = result.agents || {};
-    const strategist = agents['Strateg'];
+    const isBJ = result.pipeline_type === 'bj' || !!agents['StrategBJ'];
+    const strategist = agents[isBJ ? 'StrategBJ' : 'Strateg'];
     const humanReport = strategist?.result?.details?.human_report || strategist?.result?.summary || '';
+    const agentList = isBJ ? BJ_AGENT_LIST : RD_AGENT_LIST;
+    const guardAgentName = isBJ ? 'StrazceBJ' : 'Strazce';
+    const inspectorAgentName = isBJ ? 'InspektorBJ' : 'Inspektor';
+    const docAgentName = isBJ ? 'PorovnavacDokumentuBJ' : 'PorovnavacDokumentu';
 
     const semaphoreLabel = semaphoreColor === 'green'
         ? 'Proces může pokračovat online'
@@ -326,7 +340,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
 
     const semaphoreIcon = semaphoreColor === 'green' ? '✅' : semaphoreColor === 'orange' ? '⚠️' : '🔴';
 
-    const photoIds = Object.keys(agents['Strazce']?.result?.details?.classifications || {});
+    const photoIds = Object.keys(agents[guardAgentName]?.result?.details?.classifications || {});
 
     const renderWithLinks = (text: string | React.ReactNode) => {
         if (typeof text !== 'string' || !text) return text;
@@ -383,13 +397,13 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                             <p className={styles.verdictSubtitle}>{semaphoreLabel}</p>
                         </div>
                     </div>
-                    {agents?.['Inspektor']?.result?.details?.verdikt && (
+                    {agents?.[inspectorAgentName]?.result?.details?.verdikt && (
                         <div className={styles.categoryChip}>
                             <span className={styles.categoryLabel}>Online ocenění</span>
                             <span className={styles.categoryValue} style={{
-                                color: agents['Inspektor'].result!.details.verdikt === 'ANO' ? '#10b981' : '#ef4444'
+                                color: agents[inspectorAgentName].result!.details.verdikt === 'ANO' ? '#10b981' : '#ef4444'
                             }}>
-                                {agents['Inspektor'].result!.details.verdikt}
+                                {agents[inspectorAgentName].result!.details.verdikt}
                             </span>
                         </div>
                     )}
@@ -636,7 +650,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
 
                 {/* ── Order 2: Photo Completeness (Strazce) ── */}
                 {(() => {
-                    const guardAgent = agents['Strazce'];
+                    const guardAgent = agents[guardAgentName];
                     const guardDetails = guardAgent?.result?.details;
                     if (!guardDetails) return null;
 
@@ -1195,7 +1209,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                     Výsledky jednotlivých agentů
                 </h3>
                 <div className={styles.overviewGrid}>
-                    {['Strazce', 'Inspektor', 'ForenzniAnalytik', 'Historik', 'GeoValidator', 'PorovnavacDokumentu', 'KatastralniAnalytik'].map(name => {
+                    {agentList.map(name => {
                         const agent = agents[name];
                         if (!agent) return null;
                         const meta = AGENT_META[name];
@@ -1220,7 +1234,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                 </p>
 
                                 {/* Key details per agent */}
-                                {name === 'Strazce' && details.classifications && (
+                                {(name === 'Strazce' || name === 'StrazceBJ') && details.classifications && (
                                     <div className={styles.ovDetails}>
                                         <span>📸 {Object.keys(details.classifications).length} fotek klasifikováno</span>
                                     </div>
@@ -1231,7 +1245,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                         {agent.result?.category && <span>Kategorie: {agent.result.category}</span>}
                                     </div>
                                 )}
-                                {name === 'Inspektor' && details.verdikt && (
+                                {(name === 'Inspektor' || name === 'InspektorBJ') && details.verdikt && (
                                     <div className={styles.ovDetails}>
                                         <span>🔍 Online ocenění: {details.verdikt}</span>
                                     </div>
@@ -1268,7 +1282,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                                 ))}
                                             </div>
                                         )}
-                                        {agent.result.details && name !== 'Strateg' && (
+                                        {agent.result.details && name !== 'Strateg' && name !== 'StrategBJ' && (
                                             <details className={styles.rawDetails} open>
                                                 <summary className={styles.rawToggle}>Technická data</summary>
                                                 <pre className={styles.rawJson}>
@@ -1283,7 +1297,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                     })}
                 </div>
                 {(() => {
-                    const docAgent = agents['PorovnavacDokumentu'];
+                    const docAgent = agents[docAgentName];
                     const docDetails = docAgent?.result?.details;
                     if (!docDetails || docDetails.skipped) return null;
 

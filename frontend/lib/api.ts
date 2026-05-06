@@ -143,6 +143,7 @@ export interface PipelineResult {
     agents: Record<string, AgentState>;
     property_data?: PropertyData;
     property_address?: string;
+    pipeline_type?: 'rd' | 'bj';
 }
 
 export async function uploadFiles(
