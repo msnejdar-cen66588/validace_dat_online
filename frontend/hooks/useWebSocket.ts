@@ -59,7 +59,7 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
                 // Results not ready yet, keep polling silently
             }
         }, POLL_INTERVAL);
-    }, [sessionId]);
+    }, [sessionId, pipelineType]);
 
     const stopPolling = useCallback(() => {
         if (pollTimer.current) {
@@ -84,6 +84,7 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
         const wsUrl = pipelineType === 'bj'
             ? getBjWebSocketUrl(sessionId)
             : getWebSocketUrl(sessionId);
+        console.log(`[WS] Connecting to ${wsUrl} (pipelineType=${pipelineType})`);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
@@ -173,7 +174,7 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
                 console.error('WS parse error:', e);
             }
         };
-    }, [sessionId, startPolling, stopPolling]);
+    }, [sessionId, pipelineType, startPolling, stopPolling]);
 
     useEffect(() => {
         reconnectCount.current = 0;

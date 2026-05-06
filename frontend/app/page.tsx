@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
 import styles from './page.module.css';
-import { uploadFiles, startPipeline, parsePdf, parseLv, uploadBatch, startBatch, uploadBjFiles, startBjPipeline, parseBjPdf, type UploadResponse, type PipelineResult, type PropertyData, type LVData, type BatchCase, type ApartmentPropertyData, type BjUploadResponse, BJ_DATA_LABELS } from '@/lib/api';
+import { uploadFiles, startPipeline, parsePdf, parseLv, uploadBatch, startBatch, uploadBjFiles, startBjPipeline, parseBjPdf, getBjPipelineResults, type UploadResponse, type PipelineResult, type PropertyData, type LVData, type BatchCase, type ApartmentPropertyData, type BjUploadResponse, BJ_DATA_LABELS } from '@/lib/api';
 import PipelineCanvas from '@/components/PipelineCanvas';
 import ResultsDashboard from '@/components/ResultsDashboard';
 import ProcessingLoader from '@/components/ProcessingLoader';
@@ -395,10 +395,27 @@ export default function Home() {
   const handleStartBjPipeline = async () => {
     if (!sessionId) return;
     startBjPipeline(sessionId, selectedModel)
-      .then((result) => {
-        if (!ws.pipelineResult && result.agents) {
-          setPipelineResult(result);
-        }
+      .then(() => {
+        // Robust fallback: poll for results in case WebSocket doesn't deliver
+        let pollCount = 0;
+        const maxPolls = 30; // 30 × 10s = 5 minutes max
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          if (pollCount >= maxPolls || ws.pipelineResult || pipelineResult) {
+            clearInterval(pollInterval);
+            return;
+          }
+          try {
+            const result = await getBjPipelineResults(sessionId);
+            if (result && (result as any).completed && (result as any).semaphore) {
+              console.log('[BJ] Got result via HTTP polling fallback');
+              setPipelineResult(result);
+              clearInterval(pollInterval);
+            }
+          } catch {
+            // Not ready yet
+          }
+        }, 10000);
       })
       .catch((e: any) => {
         setError(e.message || 'Chyba při spuštění BJ pipeline');
