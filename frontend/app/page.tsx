@@ -1211,11 +1211,13 @@ export default function Home() {
                   type="file"
                   multiple
                   accept=".pdf,.jpg,.jpeg,.png"
+                  onClick={(e) => e.stopPropagation()}
                   onChange={(e) => {
-                    if (e.target.files) {
-                      setBjFloorAreaDocs(prev => [...prev, ...Array.from(e.target.files!)]);
-                      e.target.value = '';
+                    const fileList = e.target.files;
+                    if (fileList && fileList.length > 0) {
+                      setBjFloorAreaDocs(prev => [...prev, ...Array.from(fileList)]);
                     }
+                    e.target.value = '';
                   }}
                   style={{ display: 'none' }}
                 />
