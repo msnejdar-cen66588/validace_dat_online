@@ -1373,10 +1373,16 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                         const floorAreaResults: any[] = docDetails.floor_area_results || [];
                         // Find the best extracted floor area from documents
                         let docExtractedArea: number | null = null;
+                        let docZapocit: number | null = null;
+                        let docVypocet: string | null = null;
                         let docType: string | null = null;
+                        let docComponents: any = null;
                         for (const far of floorAreaResults) {
                             if (far.is_acceptable && far.extracted_floor_area_m2 != null) {
                                 docExtractedArea = far.extracted_floor_area_m2;
+                                docZapocit = far.zapocitatalna_plocha_m2 || null;
+                                docVypocet = far.zapocitatalna_vypocet || null;
+                                docComponents = far.area_components || null;
                                 docType = far.document_type;
                                 break;
                             }
@@ -1389,12 +1395,18 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                         });
                         if (plochaCheck && docExtractedArea != null) {
                             // Replace the visual AI estimate with the document-extracted value
-                            plochaCheck.observed = `${docExtractedArea} m² (z dokumentu: ${docType})`;
+                            let observedText = `${docExtractedArea} m² (z dokumentu: ${docType})`;
+                            if (docZapocit != null) {
+                                observedText += ` | Započitatelná: ${docZapocit} m²`;
+                            }
+                            plochaCheck.observed = observedText;
                             const declaredNum = parseFloat(String(plochaCheck.declared).replace(/[^0-9.,]/g, '').replace(',', '.'));
                             if (!isNaN(declaredNum) && declaredNum > 0) {
                                 const diff = Math.abs(docExtractedArea - declaredNum) / declaredNum * 100;
                                 plochaCheck.match = diff <= 10;
-                                plochaCheck.note = `Plocha z dokumentu: ${docExtractedArea} m², deklarovaná: ${declaredNum} m². Odchylka: ${diff.toFixed(0)} %.`;
+                                let noteText = `Plocha z dokumentu: ${docExtractedArea} m², deklarovaná: ${declaredNum} m². Odchylka: ${diff.toFixed(0)} %.`;
+                                if (docVypocet) noteText += ` ${docVypocet}`;
+                                plochaCheck.note = noteText;
                             }
                         } else if (plochaCheck && floorAreaResults.length > 0 && docExtractedArea == null) {
                             // Document was uploaded but area wasn't found
@@ -1402,12 +1414,16 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                         } else if (!plochaCheck && docExtractedArea != null) {
                             // No visual check exists, add a new one from the document
                             const declared = propData.plocha_bytu || 'neznámo';
+                            let observedText = `${docExtractedArea} m² (z dokumentu: ${docType})`;
+                            if (docZapocit != null) {
+                                observedText += ` | Započitatelná: ${docZapocit} m²`;
+                            }
                             checks.push({
                                 field: 'plocha bytu (z dokumentu)',
                                 declared,
-                                observed: `${docExtractedArea} m² (z dokumentu: ${docType})`,
+                                observed: observedText,
                                 match: true,
-                                note: `Extrahováno z dokumentu: ${docType}.`,
+                                note: docVypocet || `Extrahováno z dokumentu: ${docType}.`,
                             });
                         }
                     }

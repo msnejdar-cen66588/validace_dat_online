@@ -1210,7 +1210,7 @@ export default function Home() {
             )}
 
             {/* Floor Area Document Upload – multiple files */}
-            <div className={styles.pdfSection}>
+            <div className={styles.pdfSection} onClick={(e) => e.stopPropagation()}>
               <div className={styles.sectionLabel}>
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <rect x="2" y="2" width="10" height="10" rx="1" stroke="currentColor" strokeWidth="1.5" />
@@ -1223,11 +1223,18 @@ export default function Home() {
                 ref={bjFloorDocInputRef}
                 type="file"
                 multiple
-                accept=".pdf,.jpg,.jpeg,.png"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tiff,.bmp,.doc,.docx"
                 onChange={(e) => {
                   const fileList = e.target.files;
+                  console.log('[FloorAreaDocs] onChange fired, files:', fileList?.length);
                   if (fileList && fileList.length > 0) {
-                    setBjFloorAreaDocs(prev => [...prev, ...Array.from(fileList)]);
+                    const newFiles = Array.from(fileList);
+                    console.log('[FloorAreaDocs] Adding files:', newFiles.map(f => f.name));
+                    setBjFloorAreaDocs(prev => {
+                      const updated = [...prev, ...newFiles];
+                      console.log('[FloorAreaDocs] Updated count:', updated.length);
+                      return updated;
+                    });
                   }
                   e.target.value = '';
                 }}
@@ -1235,25 +1242,50 @@ export default function Home() {
               />
               <div
                 className={styles.pdfDropzone}
-                onClick={() => bjFloorDocInputRef.current?.click()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  console.log('[FloorAreaDocs] Dropzone clicked, triggering file input');
+                  bjFloorDocInputRef.current?.click();
+                }}
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const droppedFiles = e.dataTransfer.files;
+                  if (droppedFiles && droppedFiles.length > 0) {
+                    console.log('[FloorAreaDocs] Dropped files:', droppedFiles.length);
+                    setBjFloorAreaDocs(prev => [...prev, ...Array.from(droppedFiles)]);
+                  }
+                }}
               >
                 <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
                   <path d="M14 4V18M8 12L14 18L20 12" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" />
                 </svg>
-                <span>Klikněte pro nahrání dokumentů (PDF/obrázek) — lze vybrat více najednou</span>
+                <span>Klikněte nebo přetáhněte dokumenty (PDF/obrázek)</span>
               </div>
 
               {bjFloorAreaDocs.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent-green)', marginBottom: '2px' }}>
+                    📎 {bjFloorAreaDocs.length} {bjFloorAreaDocs.length === 1 ? 'dokument nahrán' : 'dokumenty nahrány'}
+                  </div>
                   {bjFloorAreaDocs.map((doc, i) => (
-                    <div key={i} className={styles.pdfFileDisplay}>
+                    <div key={`floor-doc-${i}-${doc.name}`} className={styles.pdfFileDisplay}>
                       <div className={styles.pdfFileName}>
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                           <path d="M11.5 4L5.5 10L2.5 7" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                         {doc.name}
                         <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '4px' }}>({(doc.size / 1024 / 1024).toFixed(1)} MB)</span>
-                        <button className={styles.pdfRemove} onClick={() => setBjFloorAreaDocs(prev => prev.filter((_, idx) => idx !== i))}>✕</button>
+                        <button
+                          className={styles.pdfRemove}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setBjFloorAreaDocs(prev => prev.filter((_, idx) => idx !== i));
+                          }}
+                        >✕</button>
                       </div>
                     </div>
                   ))}
