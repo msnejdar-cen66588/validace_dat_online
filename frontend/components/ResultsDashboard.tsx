@@ -1321,7 +1321,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                             : '⚠ Částečná shoda';
 
                     // ── Map property_data keys → human labels + check-field aliases ──
-                    const FIELD_CONFIG: { key: string; label: string; aliases: string[] }[] = [
+                    const RD_FIELD_CONFIG: { key: string; label: string; aliases: string[] }[] = [
                         { key: 'stav_rodinneho_domu', label: 'Stav domu', aliases: ['stav domu', 'stav', 'condition'] },
                         { key: 'pocet_podlazi', label: 'Počet podlaží', aliases: ['počet podlaží', 'podlaží', 'floor_count', 'floors'] },
                         { key: 'celkova_podlahova_plocha', label: 'Celk. podlahová plocha', aliases: ['celková podlahová plocha', 'podlahová plocha', 'plocha', 'total_floor_area'] },
@@ -1344,6 +1344,73 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                         { key: 'heating', label: 'Vytápění', aliases: [] },
                         { key: 'property_address', label: 'Adresa', aliases: [] },
                     ];
+
+                    const BJ_FIELD_CONFIG: { key: string; label: string; aliases: string[] }[] = [
+                        { key: 'adresa', label: 'Adresa', aliases: ['adresa'] },
+                        { key: 'typ_jednotky', label: 'Typ jednotky', aliases: ['typ jednotky', 'typ bytu', 'dispozice'] },
+                        { key: 'plocha_bytu', label: 'Plocha bytu', aliases: ['plocha bytu', 'plocha', 'podlahová plocha', 'plocha jednotky'] },
+                        { key: 'stav_bytu', label: 'Stav bytu', aliases: ['stav bytu', 'stav', 'condition'] },
+                        { key: 'konstrukce', label: 'Konstrukce budovy', aliases: ['konstrukce budovy', 'konstrukce', 'typ budovy'] },
+                        { key: 'stav_budovy', label: 'Stav budovy', aliases: ['stav budovy'] },
+                        { key: 'podlazi_jednotky', label: 'Podlaží jednotky', aliases: ['podlaží', 'podlazi', 'floor'] },
+                        { key: 'pocet_nadz_podlazi', label: 'Nadzemní podlaží', aliases: ['nadzemní podlaží', 'pocet nadz'] },
+                        { key: 'vytah', label: 'Výtah', aliases: ['výtah', 'elevator'] },
+                        { key: 'plocha_balkonu', label: 'Balkón', aliases: ['balkón', 'balkon', 'balkón/terasa'] },
+                        { key: 'plocha_terasy', label: 'Terasa', aliases: ['terasa'] },
+                        { key: 'plocha_sklepa', label: 'Sklep/sklad', aliases: ['sklep', 'sklad'] },
+                        { key: 'typ_vytapeni', label: 'Typ vytápění', aliases: ['typ vytápění', 'vytápění', 'heating'] },
+                        { key: 'rok_dokonceni_budovy', label: 'Rok dokončení', aliases: ['rok dokončení', 'rok výstavby'] },
+                        { key: 'rok_rekonstrukce', label: 'Rok rekonstrukce', aliases: ['rok rekonstrukce', 'rekonstrukce'] },
+                        { key: 'typ_strechy', label: 'Typ střechy', aliases: ['typ střechy', 'střecha'] },
+                        { key: 'zatepleni', label: 'Zateplení', aliases: ['zateplení'] },
+                        { key: 'typ_oken', label: 'Typ oken', aliases: ['typ oken', 'okna'] },
+                    ];
+
+                    const FIELD_CONFIG = isBJ ? BJ_FIELD_CONFIG : RD_FIELD_CONFIG;
+
+                    // ── For BJ: if floor area docs were analyzed, inject extracted area into checks ──
+                    if (isBJ) {
+                        const floorAreaResults: any[] = docDetails.floor_area_results || [];
+                        // Find the best extracted floor area from documents
+                        let docExtractedArea: number | null = null;
+                        let docType: string | null = null;
+                        for (const far of floorAreaResults) {
+                            if (far.is_acceptable && far.extracted_floor_area_m2 != null) {
+                                docExtractedArea = far.extracted_floor_area_m2;
+                                docType = far.document_type;
+                                break;
+                            }
+                        }
+
+                        // Override the AI check for "plocha bytu" with the document-extracted value
+                        const plochaCheck = checks.find((c: any) => {
+                            const f = (c.field || '').toLowerCase();
+                            return f.includes('plocha bytu') || f.includes('plocha jednotky') || f.includes('podlahová plocha');
+                        });
+                        if (plochaCheck && docExtractedArea != null) {
+                            // Replace the visual AI estimate with the document-extracted value
+                            plochaCheck.observed = `${docExtractedArea} m² (z dokumentu: ${docType})`;
+                            const declaredNum = parseFloat(String(plochaCheck.declared).replace(/[^0-9.,]/g, '').replace(',', '.'));
+                            if (!isNaN(declaredNum) && declaredNum > 0) {
+                                const diff = Math.abs(docExtractedArea - declaredNum) / declaredNum * 100;
+                                plochaCheck.match = diff <= 10;
+                                plochaCheck.note = `Plocha z dokumentu: ${docExtractedArea} m², deklarovaná: ${declaredNum} m². Odchylka: ${diff.toFixed(0)} %.`;
+                            }
+                        } else if (plochaCheck && floorAreaResults.length > 0 && docExtractedArea == null) {
+                            // Document was uploaded but area wasn't found
+                            plochaCheck.observed = (plochaCheck.observed || '') + ' | 📄 Nenalezeno v dokumentu';
+                        } else if (!plochaCheck && docExtractedArea != null) {
+                            // No visual check exists, add a new one from the document
+                            const declared = propData.plocha_bytu || 'neznámo';
+                            checks.push({
+                                field: 'plocha bytu (z dokumentu)',
+                                declared,
+                                observed: `${docExtractedArea} m² (z dokumentu: ${docType})`,
+                                match: true,
+                                note: `Extrahováno z dokumentu: ${docType}.`,
+                            });
+                        }
+                    }
 
                     // Build index: check field name → check object (case-insensitive)
                     const checksByAlias: Record<string, any> = {};
@@ -1497,7 +1564,7 @@ export default function ResultsDashboard({ result, onReset, onEdit, valuationSte
                                             📋 Formulář klienta
                                         </div>
                                         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: '#64748b' }}>
-                                            🤖 AI zjištění z fotek
+                                            🤖 {isBJ ? 'AI zjištění z fotek a dokumentů' : 'AI zjištění z fotek'}
                                         </div>
                                         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: '#64748b', textAlign: 'center' }}>
                                             Shoda
