@@ -129,7 +129,9 @@ Vrať výsledek POUZE jako validní JSON:
 
 FLOOR_AREA_DOC_PROMPT = """Jsi expert na analýzu dokumentů pro ověření podlahové plochy bytové jednotky dle metodiky bank.
 
-Dostáváš dokument (PDF nebo obrázek), který by měl věrohodně potvrzovat podlahovou plochu jednotky.
+Dostáváš dokument (PDF nebo obrázky), který by měl věrohodně potvrzovat podlahovou plochu jednotky.
+POZOR: Dokument může být rozdělen do VÍCE SOUBORŮ (např. kupní smlouva naskenovaná po stránkách do
+samostatných PDF nebo fotek). Vždy analyzuj VŠECHNY poskytnuté soubory jako JEDEN celistvý dokument.
 
 ═══════════════════════════════════════════════════════════════
 AKCEPTOVATELNÉ TYPY DOKUMENTŮ:
@@ -316,119 +318,124 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
             recommendations = ai_result.get("recommendations", [])
             overall_summary = ai_result.get("overall_summary", "")
 
-             # ── Floor area document validation (multiple docs) ──
+             # ── Floor area document validation ──
+            # All uploaded files are treated as ONE document (e.g. a contract split into multiple PDFs/photos)
             floor_area_results = []
             if floor_area_doc_paths and len(floor_area_doc_paths) > 0:
-                self.log(f"Ověřuji {len(floor_area_doc_paths)} dokument(ů) podlahové plochy...", "thinking")
-                for doc_idx, doc_path in enumerate(floor_area_doc_paths):
-                    self.log(f"  Dokument {doc_idx + 1}/{len(floor_area_doc_paths)}: {doc_path}")
-                    floor_area_result = await self._validate_floor_area_doc(
-                        doc_path, property_data
-                    )
-                    if floor_area_result:
-                        floor_area_results.append(floor_area_result)
-                        # Add floor area check to checks list
-                        declared_area = property_data.get("plocha_bytu", "neznámo")
-                        extracted = floor_area_result.get("extracted_floor_area_m2")
-                        zapocit = floor_area_result.get("zapocitatalna_plocha_m2")
-                        components = floor_area_result.get("area_components", {})
-                        vypocet = floor_area_result.get("zapocitatalna_vypocet", "")
-                        doc_type = floor_area_result.get("document_type", "neznámý")
-                        is_acceptable = floor_area_result.get("is_acceptable", False)
-                        doc_label = f"dokument podlahové plochy č.{doc_idx + 1}" if len(floor_area_doc_paths) > 1 else "dokument podlahové plochy"
+                self.log(
+                    f"Ověřuji podklad podlahové plochy ({len(floor_area_doc_paths)} soubor(ů) = 1 dokument)...",
+                    "thinking",
+                )
+                for dp in floor_area_doc_paths:
+                    self.log(f"  Soubor: {dp}")
 
-                        if not is_acceptable:
-                            checks.append({
-                                "field": doc_label,
-                                "declared": declared_area,
-                                "observed": f"Typ dokumentu: {doc_type} – neakceptovatelný",
-                                "match": False,
-                                "note": floor_area_result.get("notes", ""),
-                            })
-                            ai_warnings.append(
-                                f"Dokument č.{doc_idx + 1} ({doc_type}) "
-                                "není akceptovatelný podklad."
+                # Single AI call with ALL files as one document
+                floor_area_result = await self._validate_floor_area_doc(
+                    floor_area_doc_paths, property_data
+                )
+
+                if floor_area_result:
+                    floor_area_results.append(floor_area_result)
+                    declared_area = property_data.get("plocha_bytu", "neznámo")
+                    extracted = floor_area_result.get("extracted_floor_area_m2")
+                    zapocit = floor_area_result.get("zapocitatalna_plocha_m2")
+                    components = floor_area_result.get("area_components", {})
+                    vypocet = floor_area_result.get("zapocitatalna_vypocet", "")
+                    doc_type = floor_area_result.get("document_type", "neznámý")
+                    is_acceptable = floor_area_result.get("is_acceptable", False)
+                    doc_label = "dokument podlahové plochy"
+
+                    if not is_acceptable:
+                        checks.append({
+                            "field": doc_label,
+                            "declared": declared_area,
+                            "observed": f"Typ dokumentu: {doc_type} – neakceptovatelný",
+                            "match": False,
+                            "note": floor_area_result.get("notes", ""),
+                        })
+                        ai_warnings.append(
+                            f"Nahraný dokument ({doc_type}) není akceptovatelný podklad."
+                        )
+                    elif extracted is not None:
+                        try:
+                            declared_num = float(
+                                str(declared_area).replace("m²", "").replace("m2", "").replace(",", ".").strip()
                             )
-                        elif extracted is not None:
-                            try:
-                                declared_num = float(
-                                    str(declared_area).replace("m²", "").replace("m2", "").replace(",", ".").strip()
-                                )
-                                diff_pct = abs(extracted - declared_num) / declared_num * 100 if declared_num > 0 else 999
-                                area_match = diff_pct <= 10
+                            diff_pct = abs(extracted - declared_num) / declared_num * 100 if declared_num > 0 else 999
+                            area_match = diff_pct <= 10
 
-                                # Build rich observed text
-                                observed_parts = [f"{extracted} m² (z {doc_type})"]
-                                if zapocit is not None:
-                                    observed_parts.append(f"Započitatelná plocha: {zapocit} m²")
-                                observed_text = " | ".join(observed_parts)
-
-                                # Build detailed note with component breakdown
-                                note_parts = [
-                                    f"Plocha z dokumentu: {extracted} m², deklarovaná: {declared_num} m². "
-                                    f"Odchylka: {diff_pct:.0f} %."
-                                ]
-                                if vypocet:
-                                    note_parts.append(f"Výpočet: {vypocet}")
-                                if components:
-                                    comp_strs = []
-                                    if components.get("byt_m2"):
-                                        comp_strs.append(f"byt: {components['byt_m2']} m²")
-                                    if components.get("balkon_m2"):
-                                        comp_strs.append(f"balkón: {components['balkon_m2']} m²")
-                                    if components.get("terasa_m2"):
-                                        comp_strs.append(f"terasa: {components['terasa_m2']} m²")
-                                    if components.get("sklep_m2"):
-                                        comp_strs.append(f"sklep: {components['sklep_m2']} m²")
-                                    if components.get("garaz_m2"):
-                                        comp_strs.append(f"garáž: {components['garaz_m2']} m²")
-                                    if comp_strs:
-                                        note_parts.append("Složky: " + ", ".join(comp_strs))
-
-                                checks.append({
-                                    "field": doc_label,
-                                    "declared": declared_area,
-                                    "observed": observed_text,
-                                    "match": area_match,
-                                    "note": " ".join(note_parts),
-                                })
-                                if not area_match:
-                                    ai_warnings.append(
-                                        f"Dokument č.{doc_idx + 1}: plocha ({extracted} m²) se neshoduje "
-                                        f"s deklarovanou ({declared_num} m²) – odchylka {diff_pct:.0f} %."
-                                    )
-                            except (ValueError, TypeError):
-                                checks.append({
-                                    "field": doc_label,
-                                    "declared": declared_area,
-                                    "observed": f"{extracted} m² (z {doc_type})" + (f" | Započitatelná: {zapocit} m²" if zapocit else ""),
-                                    "match": True,
-                                    "note": "Nelze numericky porovnat s deklarovanou plochou.",
-                                })
-
-                            # Also add a dedicated "započitatelná plocha" check if available
+                            # Build rich observed text
+                            observed_parts = [f"{extracted} m² (z {doc_type})"]
                             if zapocit is not None:
-                                checks.append({
-                                    "field": "započitatelná plocha",
-                                    "declared": declared_area,
-                                    "observed": f"{zapocit} m²",
-                                    "match": True,
-                                    "note": vypocet or f"Započitatelná plocha dle metodiky: {zapocit} m²",
-                                })
-                        else:
+                                observed_parts.append(f"Započitatelná plocha: {zapocit} m²")
+                            observed_text = " | ".join(observed_parts)
+
+                            # Build detailed note with component breakdown
+                            note_parts = [
+                                f"Plocha z dokumentu: {extracted} m², deklarovaná: {declared_num} m². "
+                                f"Odchylka: {diff_pct:.0f} %."
+                            ]
+                            if vypocet:
+                                note_parts.append(f"Výpočet: {vypocet}")
+                            if components:
+                                comp_strs = []
+                                if components.get("byt_m2"):
+                                    comp_strs.append(f"byt: {components['byt_m2']} m²")
+                                if components.get("balkon_m2"):
+                                    comp_strs.append(f"balkón: {components['balkon_m2']} m²")
+                                if components.get("terasa_m2"):
+                                    comp_strs.append(f"terasa: {components['terasa_m2']} m²")
+                                if components.get("sklep_m2"):
+                                    comp_strs.append(f"sklep: {components['sklep_m2']} m²")
+                                if components.get("garaz_m2"):
+                                    comp_strs.append(f"garáž: {components['garaz_m2']} m²")
+                                if comp_strs:
+                                    note_parts.append("Složky: " + ", ".join(comp_strs))
+
                             checks.append({
                                 "field": doc_label,
                                 "declared": declared_area,
-                                "observed": f"Typ: {doc_type} – plocha nebyla nalezena v dokumentu",
-                                "match": False,
-                                "note": floor_area_result.get("notes", ""),
+                                "observed": observed_text,
+                                "match": area_match,
+                                "note": " ".join(note_parts),
                             })
-                            ai_warnings.append(
-                                f"V dokumentu č.{doc_idx + 1} se nepodařilo najít podlahovou plochu."
-                            )
+                            if not area_match:
+                                ai_warnings.append(
+                                    f"Plocha z dokumentu ({extracted} m²) se neshoduje "
+                                    f"s deklarovanou ({declared_num} m²) – odchylka {diff_pct:.0f} %."
+                                )
+                        except (ValueError, TypeError):
+                            checks.append({
+                                "field": doc_label,
+                                "declared": declared_area,
+                                "observed": f"{extracted} m² (z {doc_type})" + (f" | Započitatelná: {zapocit} m²" if zapocit else ""),
+                                "match": True,
+                                "note": "Nelze numericky porovnat s deklarovanou plochou.",
+                            })
+
+                        # Also add a dedicated "započitatelná plocha" check if available
+                        if zapocit is not None:
+                            checks.append({
+                                "field": "započitatelná plocha",
+                                "declared": declared_area,
+                                "observed": f"{zapocit} m²",
+                                "match": True,
+                                "note": vypocet or f"Započitatelná plocha dle metodiky: {zapocit} m²",
+                            })
                     else:
-                        self.log(f"Dokument č.{doc_idx + 1} nebylo možné zpracovat.", "warn")
-                        ai_warnings.append(f"Dokument č.{doc_idx + 1} se nepodařilo zpracovat.")
+                        checks.append({
+                            "field": doc_label,
+                            "declared": declared_area,
+                            "observed": f"Typ: {doc_type} – plocha nebyla nalezena v dokumentu",
+                            "match": False,
+                            "note": floor_area_result.get("notes", ""),
+                        })
+                        ai_warnings.append(
+                            "V nahraném dokumentu se nepodařilo najít podlahovou plochu."
+                        )
+                else:
+                    self.log("Dokument podlahové plochy nebylo možné zpracovat.", "warn")
+                    ai_warnings.append("Dokument podlahové plochy se nepodařilo zpracovat.")
             else:
                 # No floor area docs uploaded
                 ai_warnings.append(
@@ -482,48 +489,92 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
             )
 
     async def _validate_floor_area_doc(
-        self, doc_path: str, property_data: dict
+        self, doc_paths: list[str], property_data: dict
     ) -> dict | None:
-        """Validate the floor area document using AI."""
+        """Validate floor area document(s) using AI.
+
+        All provided files are treated as parts of a single document
+        (e.g. a purchase contract split into multiple PDFs or photos).
+        They are sent together in one AI call so the model sees the
+        complete document context.
+        """
         try:
             import os
             from google.genai import types
 
-            if not os.path.exists(doc_path):
-                self.log(f"Soubor neexistuje: {doc_path}", "warn")
+            # Read all files and build parts
+            file_parts = []
+            total_bytes = 0
+            for doc_path in doc_paths:
+                if not os.path.exists(doc_path):
+                    self.log(f"Soubor neexistuje: {doc_path}", "warn")
+                    continue
+
+                with open(doc_path, "rb") as f:
+                    doc_bytes = f.read()
+
+                total_bytes += len(doc_bytes)
+
+                # Determine mime type
+                ext = doc_path.lower().rsplit(".", 1)[-1] if "." in doc_path else ""
+                mime_map = {
+                    "pdf": "application/pdf",
+                    "jpg": "image/jpeg",
+                    "jpeg": "image/jpeg",
+                    "png": "image/png",
+                    "webp": "image/webp",
+                    "heic": "image/heic",
+                    "heif": "image/heif",
+                    "tiff": "image/tiff",
+                    "tif": "image/tiff",
+                    "bmp": "image/bmp",
+                }
+                mime_type = mime_map.get(ext, "image/jpeg")
+
+                file_parts.append({
+                    "bytes": doc_bytes,
+                    "mime_type": mime_type,
+                    "filename": os.path.basename(doc_path),
+                })
+
+            if not file_parts:
+                self.log("Žádné platné soubory pro ověření plochy.", "warn")
                 return None
 
-            with open(doc_path, "rb") as f:
-                doc_bytes = f.read()
-
-            self.log(f"Čtu dokument plochy: {doc_path} ({len(doc_bytes)} bytes)")
-
-            # Determine mime type
-            ext = doc_path.lower().rsplit(".", 1)[-1] if "." in doc_path else ""
-            mime_map = {
-                "pdf": "application/pdf",
-                "jpg": "image/jpeg",
-                "jpeg": "image/jpeg",
-                "png": "image/png",
-                "webp": "image/webp",
-                "heic": "image/heic",
-                "heif": "image/heif",
-                "tiff": "image/tiff",
-                "tif": "image/tiff",
-                "bmp": "image/bmp",
-            }
-            mime_type = mime_map.get(ext, "image/jpeg")
+            self.log(
+                f"Čtu {len(file_parts)} soubor(ů) podlahové plochy "
+                f"(celkem {total_bytes} bytes) jako 1 dokument"
+            )
 
             declared_area = property_data.get("plocha_bytu", "neznámo")
 
+            # Build prompt with ALL files as one document
+            file_count_note = ""
+            if len(file_parts) > 1:
+                file_count_note = (
+                    f"\n\nDOKUMENT JE ROZDĚLEN DO {len(file_parts)} SOUBORŮ. "
+                    "Všechny soubory tvoří dohromady JEDEN dokument (např. kupní smlouva "
+                    "naskenovaná po stránkách). Analyzuj je jako celek.\n"
+                )
+
             parts = [
                 f"Analyzuj tento dokument, který by měl potvrzovat podlahovou plochu bytové jednotky.\n"
-                f"Deklarovaná plocha bytu z formuláře: {declared_area}\n\n"
+                f"Deklarovaná plocha bytu z formuláře: {declared_area}\n"
+                f"{file_count_note}\n"
                 f"Extrahuj VŠECHNY zmíněné plochy (byt, balkón, terasa, sklep, garáž) "
                 f"a VYPOČÍTEJ započitatelnou plochu dle metodiky.\n\n",
-                types.Part.from_bytes(data=doc_bytes, mime_type=mime_type),
-                "\n\nUrči typ dokumentu, extrahuj plochy, vypočítej započitatelnou plochu a posuď věrohodnost.",
             ]
+
+            for i, fp in enumerate(file_parts):
+                parts.append(
+                    types.Part.from_bytes(data=fp["bytes"], mime_type=fp["mime_type"])
+                )
+                if len(file_parts) > 1:
+                    parts.append(f"(Soubor {i + 1}/{len(file_parts)}: {fp['filename']})")
+
+            parts.append(
+                "\n\nUrči typ dokumentu, extrahuj plochy, vypočítej započitatelnou plochu a posuď věrohodnost."
+            )
 
             response_text = await self.client.generate_content(
                 system_instruction=FLOOR_AREA_DOC_PROMPT,
