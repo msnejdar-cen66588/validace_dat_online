@@ -157,13 +157,16 @@ TVŮJ ÚKOL:
    - Plocha zahrady / předzahrádky
    Hledej klíčová slova: "podlahová plocha", "výměra", "plocha bytu", "plocha jednotky", "m²", "celková plocha"
 3. VYPOČÍTEJ ZAPOČITATELNOU PLOCHU dle metodiky:
-   - Plocha bytu: koeficient 1.0 (100 %)
-   - Balkón / lodžie: koeficient 0.2 (20 %)
-   - Terasa: koeficient 0.1 (10 %)
-   - Sklep / komora: koeficient 0.1 (10 %)
+   - Hlavní plocha bytu (místnosti): koeficient 1.0 (100 %)
+   - Vedlejší plocha (balkón, lodžie, terasa, sklep, komora): koeficient 0.5 (50 %)
    - Garáž: koeficient 0.8 (80 %) – pouze pokud je součástí jednotky
    - Zahrada: koeficient 0.0 (nezapočítává se)
-   Započitatelná plocha = byt×1.0 + balkón×0.2 + terasa×0.1 + sklep×0.1 + garáž×0.8
+
+   PRAVIDLO PRO VEDLEJŠÍ PLOCHU:
+   - Sečti veškerou vedlejší plochu (balkóny, lodžie, terasy, sklepy, komory) a vynásob ji koeficientem 0.5.
+   - Započitatelná vedlejší plocha smí být MAXIMÁLNĚ 20 % z hlavní plochy bytu.
+   - Příklad: Byt 30 m², terasa 30 m². Terasa po koeficientu (30 * 0.5) = 15 m². Ale maximum je 20 % z 30 m², což je 6 m². Započte se jen 6 m².
+   Započitatelná plocha = Hlavní plocha bytu + MIN(Vedlejší plocha × 0.5, Hlavní plocha bytu × 0.20) + Garáž × 0.8
 4. Posuď VĚROHODNOST – je to formální dokument s právní vahou?
 
 ═══════════════════════════════════════════════════════════════
@@ -181,8 +184,8 @@ VÝSTUP – vrať POUZE validní JSON:
     "garaz_m2": 0,
     "zahrada_m2": 0
   },
-  "zapocitatalna_plocha_m2": 56.22,
-  "zapocitatalna_vypocet": "55.0×1.0 + 4.5×0.2 + 0×0.1 + 3.2×0.1 + 0×0.8 = 56.22 m²",
+  "zapocitatalna_plocha_m2": 58.85,
+  "zapocitatalna_vypocet": "Byt: 55.0. Vedlejší: (4.5+3.2)*0.5 = 3.85. Limit: 55.0*0.2 = 11.0. 3.85 < 11.0, započte se 3.85. Celkem: 55.0 + 3.85 = 58.85 m²",
   "confidence": 0.0-1.0,
   "notes": "Podrobný popis: jaký dokument to je, co v něm stojí, odkud jsi plochu vzal."
 }
