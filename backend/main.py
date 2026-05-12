@@ -1131,9 +1131,30 @@ async def upload_bj_files(
         for idx, doc in enumerate(floor_area_docs):
             if doc and doc.filename:
                 ext = os.path.splitext(doc.filename)[1].lower()
+                doc_bytes = await doc.read()
+
+                # Compress image-based floor area docs to save memory
+                if ext in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"):
+                    try:
+                        from PIL import Image
+                        img = Image.open(io.BytesIO(doc_bytes))
+                        # Downscale to max 1600px (enough for text extraction)
+                        max_dim = 1600
+                        if max(img.size) > max_dim:
+                            img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+                        # Save as JPEG to reduce size
+                        buf = io.BytesIO()
+                        if img.mode in ("RGBA", "P"):
+                            img = img.convert("RGB")
+                        img.save(buf, format="JPEG", quality=80)
+                        doc_bytes = buf.getvalue()
+                        ext = ".jpg"
+                        del img, buf
+                    except Exception as e:
+                        print(f"[BJ] Could not compress floor area image {idx}: {e}")
+
                 doc_filename = f"floor_area_doc_{idx}{ext}"
                 doc_path = os.path.join(session_dir, doc_filename)
-                doc_bytes = await doc.read()
                 with open(doc_path, "wb") as f:
                     f.write(doc_bytes)
                 floor_area_doc_paths.append(doc_path)

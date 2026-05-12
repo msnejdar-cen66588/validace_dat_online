@@ -500,62 +500,36 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
         (e.g. a purchase contract split into multiple PDFs or photos).
         They are sent together in one AI call so the model sees the
         complete document context.
+
+        Memory-optimised: reads files one-by-one, converts to Part
+        immediately, and frees the bytes.
         """
         try:
             import os
+            import gc
             from google.genai import types
 
-            # Read all files and build parts
-            file_parts = []
-            total_bytes = 0
-            for doc_path in doc_paths:
-                if not os.path.exists(doc_path):
-                    self.log(f"Soubor neexistuje: {doc_path}", "warn")
-                    continue
+            # Limit to 5 files max to prevent OOM (512 MB Render)
+            effective_paths = doc_paths[:5]
+            if len(doc_paths) > 5:
+                self.log(
+                    f"Omezuji počet souborů plochy z {len(doc_paths)} na 5 (paměťový limit).",
+                    "warn",
+                )
 
-                with open(doc_path, "rb") as f:
-                    doc_bytes = f.read()
-
-                total_bytes += len(doc_bytes)
-
-                # Determine mime type
-                ext = doc_path.lower().rsplit(".", 1)[-1] if "." in doc_path else ""
-                mime_map = {
-                    "pdf": "application/pdf",
-                    "jpg": "image/jpeg",
-                    "jpeg": "image/jpeg",
-                    "png": "image/png",
-                    "webp": "image/webp",
-                    "heic": "image/heic",
-                    "heif": "image/heif",
-                    "tiff": "image/tiff",
-                    "tif": "image/tiff",
-                    "bmp": "image/bmp",
-                }
-                mime_type = mime_map.get(ext, "image/jpeg")
-
-                file_parts.append({
-                    "bytes": doc_bytes,
-                    "mime_type": mime_type,
-                    "filename": os.path.basename(doc_path),
-                })
-
-            if not file_parts:
+            # Validate paths exist
+            valid_paths = [p for p in effective_paths if os.path.exists(p)]
+            if not valid_paths:
                 self.log("Žádné platné soubory pro ověření plochy.", "warn")
                 return None
 
-            self.log(
-                f"Čtu {len(file_parts)} soubor(ů) podlahové plochy "
-                f"(celkem {total_bytes} bytes) jako 1 dokument"
-            )
-
             declared_area = property_data.get("plocha_bytu", "neznámo")
 
-            # Build prompt with ALL files as one document
+            # Build prompt header
             file_count_note = ""
-            if len(file_parts) > 1:
+            if len(valid_paths) > 1:
                 file_count_note = (
-                    f"\n\nDOKUMENT JE ROZDĚLEN DO {len(file_parts)} SOUBORŮ. "
+                    f"\n\nDOKUMENT JE ROZDĚLEN DO {len(valid_paths)} SOUBORŮ. "
                     "Všechny soubory tvoří dohromady JEDEN dokument (např. kupní smlouva "
                     "naskenovaná po stránkách). Analyzuj je jako celek.\n"
                 )
@@ -568,12 +542,44 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                 f"a VYPOČÍTEJ započitatelnou plochu dle metodiky.\n\n",
             ]
 
-            for i, fp in enumerate(file_parts):
+            # Mime type map
+            mime_map = {
+                "pdf": "application/pdf",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "png": "image/png",
+                "webp": "image/webp",
+                "heic": "image/heic",
+                "heif": "image/heif",
+                "tiff": "image/tiff",
+                "tif": "image/tiff",
+                "bmp": "image/bmp",
+            }
+
+            # Read files one by one – free bytes immediately after creating Part
+            total_bytes = 0
+            for i, doc_path in enumerate(valid_paths):
+                with open(doc_path, "rb") as f:
+                    doc_bytes = f.read()
+                total_bytes += len(doc_bytes)
+
+                ext = doc_path.lower().rsplit(".", 1)[-1] if "." in doc_path else ""
+                mime_type = mime_map.get(ext, "image/jpeg")
+
                 parts.append(
-                    types.Part.from_bytes(data=fp["bytes"], mime_type=fp["mime_type"])
+                    types.Part.from_bytes(data=doc_bytes, mime_type=mime_type)
                 )
-                if len(file_parts) > 1:
-                    parts.append(f"(Soubor {i + 1}/{len(file_parts)}: {fp['filename']})")
+                if len(valid_paths) > 1:
+                    parts.append(f"(Soubor {i + 1}/{len(valid_paths)}: {os.path.basename(doc_path)})")
+
+                # Free bytes immediately
+                del doc_bytes
+                gc.collect()
+
+            self.log(
+                f"Čtu {len(valid_paths)} soubor(ů) podlahové plochy "
+                f"(celkem {total_bytes} bytes) jako 1 dokument"
+            )
 
             parts.append(
                 "\n\nUrči typ dokumentu, extrahuj plochy, vypočítej započitatelnou plochu a posuď věrohodnost."
@@ -585,6 +591,10 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                 response_mime_type="application/json",
                 max_output_tokens=3000,
             )
+
+            # Free parts to release image bytes held by Part objects
+            del parts
+            gc.collect()
 
             result = robust_json_parse(response_text)
             zapocit = result.get("zapocitatalna_plocha_m2")
