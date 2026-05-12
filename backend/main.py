@@ -588,17 +588,16 @@ async def get_pipeline_report(session_id: str):
 
 @app.post("/api/agent/prompt/{session_id}/{agent_name}")
 async def update_agent_prompt(session_id: str, agent_name: str, prompt: dict):
-    """Update an agent's system prompt."""
-    orchestrator = orchestrators.get(session_id)
-    if not orchestrator:
-        raise HTTPException(status_code=404, detail="No active pipeline.")
+    """Update an agent's system prompt (stored for next pipeline run)."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found.")
 
-    agent = orchestrator.agents.get(agent_name)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found.")
-
-    agent.system_prompt = prompt.get("system_prompt", agent.system_prompt)
-    return {"status": "ok", "agent": agent_name, "prompt_length": len(agent.system_prompt)}
+    # Store custom prompt for next pipeline run (agents are created lazily)
+    session = sessions[session_id]
+    custom_prompts = session.setdefault("custom_prompts", {})
+    new_prompt = prompt.get("system_prompt", "")
+    custom_prompts[agent_name] = new_prompt
+    return {"status": "ok", "agent": agent_name, "prompt_length": len(new_prompt)}
 
 
 @app.websocket("/ws/pipeline/{session_id}")
@@ -624,12 +623,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             if msg.get("type") == "update_prompt":
                 agent_name = msg.get("agent")
                 new_prompt = msg.get("prompt")
-                if orchestrator and agent_name in orchestrator.agents:
-                    orchestrator.agents[agent_name].system_prompt = new_prompt
-                    await websocket.send_json({
-                        "type": "prompt_updated",
-                        "agent": agent_name,
-                    })
+                # Agents are lazily created; acknowledge the message
+                await websocket.send_json({
+                    "type": "prompt_updated",
+                    "agent": agent_name,
+                })
 
     except WebSocketDisconnect:
         if session_id in global_websockets and websocket in global_websockets[session_id]:
@@ -1359,12 +1357,11 @@ async def bj_websocket_endpoint(websocket: WebSocket, session_id: str):
             if msg.get("type") == "update_prompt":
                 agent_name = msg.get("agent")
                 new_prompt = msg.get("prompt")
-                if orchestrator and agent_name in orchestrator.agents:
-                    orchestrator.agents[agent_name].system_prompt = new_prompt
-                    await websocket.send_json({
-                        "type": "prompt_updated",
-                        "agent": agent_name,
-                    })
+                # Agents are lazily created; acknowledge the message
+                await websocket.send_json({
+                    "type": "prompt_updated",
+                    "agent": agent_name,
+                })
 
     except WebSocketDisconnect:
         if session_id in bj_websockets and websocket in bj_websockets[session_id]:

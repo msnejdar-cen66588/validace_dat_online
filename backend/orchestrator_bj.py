@@ -6,24 +6,22 @@ Wave C (sequential, depends on all): StrategBJ
 
 Reuses shared agents: ForenzniAnalytik, Historik, GeoValidator, KatastralniAnalytik
 New BJ agents: StrazceBJ, InspektorBJ, PorovnavacDokumentuBJ, StrategBJ
+
+Memory-optimized for Render.com 512 MB:
+  - Agents are lazily created and destroyed after execution
+  - Semaphore(2) limits concurrency within each wave
+  - Aggressive gc.collect() between waves
 """
 import asyncio
 import json
 import time
 import uuid
+import gc
 from typing import Optional
 
 from fastapi import WebSocket
 
 from agents.base import AgentStatus, AgentResult
-from agents.strazce_bj import StrazceBJAgent
-from agents.forenzni_analytik import ForenzniAnalytikAgent
-from agents.historik import HistorikAgent
-from agents.inspektor_bj import InspektorBJAgent
-from agents.geo_validator import GeoValidatorAgent
-from agents.porovnavac_dokumentu_bj import PorovnavacDokumentuBJAgent
-from agents.katastralni_analytik import KatastralniAnalytikAgent
-from agents.strateg_bj import StrategBJAgent
 
 
 # Wave definitions
@@ -31,43 +29,60 @@ BJ_WAVE_A = ["StrazceBJ", "ForenzniAnalytik", "Historik", "InspektorBJ"]
 BJ_WAVE_B = ["PorovnavacDokumentuBJ", "KatastralniAnalytik", "GeoValidator"]
 BJ_WAVE_C = ["StrategBJ"]
 
+# Lazy import map – avoids loading all agent modules at import time
+_AGENT_FACTORY = {
+    "StrazceBJ": ("agents.strazce_bj", "StrazceBJAgent"),
+    "ForenzniAnalytik": ("agents.forenzni_analytik", "ForenzniAnalytikAgent"),
+    "Historik": ("agents.historik", "HistorikAgent"),
+    "InspektorBJ": ("agents.inspektor_bj", "InspektorBJAgent"),
+    "GeoValidator": ("agents.geo_validator", "GeoValidatorAgent"),
+    "PorovnavacDokumentuBJ": ("agents.porovnavac_dokumentu_bj", "PorovnavacDokumentuBJAgent"),
+    "KatastralniAnalytik": ("agents.katastralni_analytik", "KatastralniAnalytikAgent"),
+    "StrategBJ": ("agents.strateg_bj", "StrategBJAgent"),
+}
+
+
+def _create_agent(name: str, model_name: str):
+    """Lazily import and instantiate an agent."""
+    import importlib
+    module_path, class_name = _AGENT_FACTORY[name]
+    module = importlib.import_module(module_path)
+    cls = getattr(module, class_name)
+    return cls(model_name=model_name)
+
 
 class BJPipelineOrchestrator:
-    """Orchestrates the parallel-wave execution of all BJ validation agents."""
+    """Orchestrates the parallel-wave execution of all BJ validation agents.
+
+    Memory-optimised: agents are created on demand, executed, results saved,
+    and the agent instance is discarded immediately to free RAM.
+    """
 
     def __init__(self, session_id: str, model_name: str = "gemini"):
         self.session_id = session_id
         self.pipeline_id = str(uuid.uuid4())[:8]
         self.model_name = model_name
 
-        # Initialize agents (BJ-specific + shared)
-        self.agents = {
-            "StrazceBJ": StrazceBJAgent(model_name=model_name),
-            "ForenzniAnalytik": ForenzniAnalytikAgent(model_name=model_name),
-            "Historik": HistorikAgent(model_name=model_name),
-            "InspektorBJ": InspektorBJAgent(model_name=model_name),
-            "GeoValidator": GeoValidatorAgent(model_name=model_name),
-            "PorovnavacDokumentuBJ": PorovnavacDokumentuBJAgent(model_name=model_name),
-            "KatastralniAnalytik": KatastralniAnalytikAgent(model_name=model_name),
-            "StrategBJ": StrategBJAgent(model_name=model_name),
-        }
+        # No agents pre-allocated – they are created lazily in _run_agent
         self.agent_order = BJ_WAVE_A + BJ_WAVE_B + BJ_WAVE_C
         self.active_connections: list[WebSocket] = []
         self.is_running = False
-        self.results = {}
-        # Limit concurrency to 2 agents at a time to prevent Render OOM (512MB RAM)
+        self.results: dict[str, dict] = {}
+        # Limit concurrency to 2 agents at a time to prevent Render OOM (512 MB)
         self.semaphore = asyncio.Semaphore(2)
 
     async def broadcast(self, message: dict):
         """Broadcast a message to all WebSocket connections."""
+        dead: list[WebSocket] = []
         for ws in self.active_connections:
             try:
                 await ws.send_json(message)
             except Exception:
-                pass
+                dead.append(ws)
+        for ws in dead:
+            self.active_connections.remove(ws)
 
     async def _notify_status(self, agent_name: str, status: str, extra: dict = None):
-        """Send agent status update via WebSocket."""
         msg = {
             "type": "agent_status",
             "pipeline_id": self.pipeline_id,
@@ -80,7 +95,6 @@ class BJPipelineOrchestrator:
         await self.broadcast(msg)
 
     async def _notify_log(self, agent_name: str, message: str, level: str = "info"):
-        """Send agent log via WebSocket."""
         await self.broadcast({
             "type": "agent_log",
             "pipeline_id": self.pipeline_id,
@@ -91,7 +105,6 @@ class BJPipelineOrchestrator:
         })
 
     async def _notify_wave(self, wave_name: str, agents: list[str]):
-        """Notify frontend that a new wave is starting."""
         await self.broadcast({
             "type": "pipeline_wave",
             "pipeline_id": self.pipeline_id,
@@ -100,38 +113,49 @@ class BJPipelineOrchestrator:
             "timestamp": time.time(),
         })
 
+    # ── Core agent runner (lazy init + teardown) ──────────────────────────
+
     async def _run_agent(self, agent_name: str, context: dict, agent_results: dict) -> AgentResult:
-        """Run a single agent and broadcast its status."""
-        import gc
-        agent = self.agents[agent_name]
-
-        if context.get("custom_prompts", {}).get(agent_name):
-            agent.system_prompt = context["custom_prompts"][agent_name]
-
+        """Create an agent, run it inside the semaphore, save result, destroy agent."""
         await self._notify_status(agent_name, "processing")
-        await self._notify_log(agent_name, f"Agent {agent_name} čeká ve frontě (omezení paměti)...")
+        await self._notify_log(agent_name, f"Agent {agent_name} čeká ve frontě...")
 
         run_context = {**context, "agent_results": dict(agent_results)}
-        
+
         async with self.semaphore:
             await self._notify_log(agent_name, f"Agent {agent_name} se spouští...")
-            result = await agent.execute(run_context)
 
-        for log_entry in agent.logs:
-            await self._notify_log(agent_name, log_entry.message, log_entry.level)
+            # Lazy-create agent
+            agent = _create_agent(agent_name, self.model_name)
 
-        await self._notify_status(
-            agent_name,
-            result.status.value,
-            {"elapsed_time": agent.get_elapsed_time()},
-        )
+            if context.get("custom_prompts", {}).get(agent_name):
+                agent.system_prompt = context["custom_prompts"][agent_name]
 
-        self.results[agent_name] = agent.to_dict()
-        gc.collect()
+            try:
+                result = await agent.execute(run_context)
+            except Exception as exc:
+                result = AgentResult(
+                    status=AgentStatus.FAIL,
+                    summary=f"Chyba: {exc}",
+                    errors=[str(exc)],
+                )
+
+            # Flush logs
+            for log_entry in agent.logs:
+                await self._notify_log(agent_name, log_entry.message, log_entry.level)
+
+            elapsed = agent.get_elapsed_time()
+            self.results[agent_name] = agent.to_dict()
+
+            # Destroy agent to free memory
+            del agent
+            gc.collect()
+
+        await self._notify_status(agent_name, result.status.value, {"elapsed_time": elapsed})
         return result
 
     async def _run_wave(self, wave_name: str, agent_names: list[str], context: dict, agent_results: dict) -> dict:
-        """Run a list of agents in parallel."""
+        """Run agents in a wave. Semaphore inside _run_agent limits real concurrency."""
         await self._notify_wave(wave_name, agent_names)
 
         tasks = {
@@ -139,7 +163,7 @@ class BJPipelineOrchestrator:
             for name in agent_names
         }
 
-        wave_results = {}
+        wave_results: dict[str, AgentResult] = {}
         for name, task in tasks.items():
             try:
                 wave_results[name] = await task
@@ -156,13 +180,15 @@ class BJPipelineOrchestrator:
                     errors=[str(e)],
                 )
 
+        gc.collect()
         return wave_results
+
+    # ── Pipeline execution ────────────────────────────────────────────────
 
     async def run_pipeline(self, context: dict) -> dict:
         """Execute the full BJ pipeline in parallel waves."""
         self.is_running = True
         start_time = time.time()
-        import gc
 
         await self.broadcast({
             "type": "pipeline_start",
@@ -178,31 +204,29 @@ class BJPipelineOrchestrator:
             },
         })
 
-        agent_results = {}
+        agent_results: dict[str, AgentResult] = {}
 
-        # ── Wave A: Independent agents ──
+        # ── Wave A ──
         print("[BJ Pipeline] === Wave A: StrazceBJ, ForenzniAnalytik, Historik, InspektorBJ ===")
         wave_a = await self._run_wave("A", BJ_WAVE_A, context, agent_results)
         agent_results.update(wave_a)
-        gc.collect()
 
-        # ── Wave B: Depends on Wave A ──
+        # ── Wave B ──
         print("[BJ Pipeline] === Wave B: PorovnavacDokumentuBJ, KatastralniAnalytik, GeoValidator ===")
         wave_b = await self._run_wave("B", BJ_WAVE_B, context, agent_results)
         agent_results.update(wave_b)
-        gc.collect()
 
-        # ── Wave C: StrategBJ – aggregates everything ──
+        # ── Wave C: StrategBJ ──
         print("[BJ Pipeline] === Wave C: StrategBJ ===")
         await self._notify_wave("C", BJ_WAVE_C)
-        strategist = self.agents["StrategBJ"]
+        await self._notify_status("StrategBJ", "processing")
+        await self._notify_log("StrategBJ", "StrategBJ agreguje výsledky všech agentů...")
+
+        strategist = _create_agent("StrategBJ", self.model_name)
         strategist_context = {**context, "agent_results": agent_results}
 
         if context.get("custom_prompts", {}).get("StrategBJ"):
             strategist.system_prompt = context["custom_prompts"]["StrategBJ"]
-
-        await self._notify_status("StrategBJ", "processing")
-        await self._notify_log("StrategBJ", "StrategBJ agreguje výsledky všech agentů...")
 
         try:
             strategist_result = await strategist.execute(strategist_context)
@@ -220,14 +244,16 @@ class BJPipelineOrchestrator:
         for log_entry in strategist.logs:
             await self._notify_log("StrategBJ", log_entry.message, log_entry.level)
 
+        elapsed = strategist.get_elapsed_time()
+        self.results["StrategBJ"] = strategist.to_dict()
+        del strategist
+        gc.collect()
+
         await self._notify_status(
             "StrategBJ",
             strategist_result.status.value,
-            {"elapsed_time": strategist.get_elapsed_time()},
+            {"elapsed_time": elapsed},
         )
-
-        self.results["StrategBJ"] = strategist.to_dict()
-        gc.collect()
 
         total_time = round(time.time() - start_time, 2)
         self.is_running = False
@@ -262,8 +288,5 @@ class BJPipelineOrchestrator:
             "session_id": self.session_id,
             "pipeline_type": "bj",
             "is_running": self.is_running,
-            "agents": {
-                name: agent.to_dict()
-                for name, agent in self.agents.items()
-            },
+            "agents": self.results,
         }
