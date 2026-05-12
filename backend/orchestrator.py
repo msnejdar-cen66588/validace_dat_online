@@ -54,6 +54,8 @@ class PipelineOrchestrator:
         self.active_connections: list[WebSocket] = []
         self.is_running = False
         self.results = {}
+        # Limit concurrency to 2 agents at a time to prevent Render OOM (512MB RAM)
+        self.semaphore = asyncio.Semaphore(2)
 
     async def broadcast(self, message: dict):
         """Broadcast a message to all WebSocket connections."""
@@ -106,10 +108,13 @@ class PipelineOrchestrator:
             agent.system_prompt = context["custom_prompts"][agent_name]
 
         await self._notify_status(agent_name, "processing")
-        await self._notify_log(agent_name, f"Agent {agent_name} starting...")
+        await self._notify_log(agent_name, f"Agent {agent_name} čeká ve frontě (omezení paměti)...")
 
         run_context = {**context, "agent_results": dict(agent_results)}
-        result = await agent.execute(run_context)
+        
+        async with self.semaphore:
+            await self._notify_log(agent_name, f"Agent {agent_name} se spouští...")
+            result = await agent.execute(run_context)
 
         for log_entry in agent.logs:
             await self._notify_log(agent_name, log_entry.message, log_entry.level)
