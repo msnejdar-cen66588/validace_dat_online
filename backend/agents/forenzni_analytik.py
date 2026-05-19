@@ -11,6 +11,7 @@ from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient, robust_json_parse
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
+    MANIPULATION_SCORE_FAIL, MANIPULATION_SCORE_WARN,
     MANIPULATION_SCORE_THRESHOLD, CONFIDENCE_THRESHOLD,
     GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_CREDENTIALS_JSON, BLOCKED_DOMAINS
 )
@@ -217,14 +218,15 @@ class ForenzniAnalytikAgent(BaseAgent):
                     overall["flagged_count"] = overall.get("flagged_count", 0) + 1
                     continue
                 
-                if score >= MANIPULATION_SCORE_THRESHOLD and confidence >= CONFIDENCE_THRESHOLD:
+                # SEMAFOR methodology: >=0.9 = FAIL, 0.3-0.89 = WARN
+                if score >= MANIPULATION_SCORE_FAIL:
                     errors.append(
-                        f"Photo {photo_id}: manipulation_score={score:.2f}, confidence={confidence:.2f} – "
-                        f"překročen práh ({MANIPULATION_SCORE_THRESHOLD}/{CONFIDENCE_THRESHOLD})"
+                        f"Photo {photo_id}: manipulation_score={score:.2f} – "
+                        f"překročen blokující práh manipulace (≥{MANIPULATION_SCORE_FAIL})"
                     )
-                elif score >= 0.4:
+                elif score >= MANIPULATION_SCORE_WARN:
                     warnings.append(
-                        f"Photo {photo_id}: podezření na manipulaci (score={score:.2f})"
+                        f"Photo {photo_id}: podezření na manipulaci (score={score:.2f}, práh eskalace ≥{MANIPULATION_SCORE_WARN})"
                     )
 
             overall["max_manipulation_score"] = max_score

@@ -13,15 +13,18 @@ from pypdf import PdfReader
 from config import UPLOAD_DIR, SUPPORTED_EXTENSIONS
 from preprocessor import ImagePreprocessor
 from orchestrator import PipelineOrchestrator
+from orchestrator_bj import BJPipelineOrchestrator
 from pdf_parser import parse_pdf
+from pdf_parser_bj import parse_bj_pdf
 from lv_parser import parse_lv
 
 
 # ── Filename-based PDF classification ──────────────────────────────────────
 
-def classify_pdf(filename: str) -> str:
+def classify_pdf(filename: str, pipeline_type: str = "rd") -> str:
     """Classify a PDF by its filename convention.
-    Returns 'formular' for client data form, 'lv' for List Vlastnictví, or 'unknown'.
+    Returns 'formular' for client data form, 'lv' for List Vlastnictví,
+    'floor_area' for floor area docs (BJ only), or 'unknown'.
     """
     name_lower = filename.lower()
     if name_lower.startswith("udajeprooceneni"):
@@ -33,12 +36,15 @@ def classify_pdf(filename: str) -> str:
         return "lv"
     if "oceneni" in name_lower or "udaje" in name_lower:
         return "formular"
+    # BJ-specific: any remaining PDF is assumed to be a floor area document
+    if pipeline_type == "bj":
+        return "floor_area"
     return "unknown"
 
 
 # ── Subfolder grouping from webkitdirectory upload ─────────────────────────
 
-def group_files_by_subfolder(filenames: list[str], file_paths_map: dict[str, str]) -> dict[str, dict]:
+def group_files_by_subfolder(filenames: list[str], file_paths_map: dict[str, str], pipeline_type: str = "rd") -> dict[str, dict]:
     """Group uploaded files by their immediate subfolder.
 
     webkitdirectory sends relative paths like: 'batch/01/photo.jpg', 'batch/02/lv.pdf'
@@ -79,7 +85,7 @@ def group_files_by_subfolder(filenames: list[str], file_paths_map: dict[str, str
         if ext in SUPPORTED_EXTENSIONS:
             cases[subfolder]["images"].append((filename, temp_path))
         elif ext == ".pdf":
-            pdf_type = classify_pdf(filename)
+            pdf_type = classify_pdf(filename, pipeline_type)
             cases[subfolder]["pdfs"].append({
                 "filename": filename,
                 "temp_path": temp_path,
@@ -94,9 +100,10 @@ def group_files_by_subfolder(filenames: list[str], file_paths_map: dict[str, str
 class BatchSession:
     """Represents a batch of valuation cases."""
 
-    def __init__(self, batch_id: str, model: str = "gpt-5.4-mini"):
+    def __init__(self, batch_id: str, model: str = "gpt-5.4-mini", pipeline_type: str = "rd"):
         self.batch_id = batch_id
         self.model = model
+        self.pipeline_type = pipeline_type  # "rd" or "bj"
         self.status = "pending"  # pending | processing | completed | error
         self.cases: list[dict] = []
         self.case_results: dict[str, dict] = {}
@@ -340,6 +347,180 @@ async def prepare_single_case(
     return case
 
 
+async def prepare_single_case_bj(
+    rev_id: str,
+    case_data: dict,
+    batch_id: str,
+) -> dict:
+    """Process uploaded files for a single BJ case: compress images, parse BJ PDFs.
+    Analogous to prepare_single_case but uses BJ-specific parsers.
+    """
+    case_id = f"{batch_id}_{rev_id}"
+    session_id = str(uuid.uuid4())[:8]
+
+    session_dir = os.path.join(UPLOAD_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+
+    # ── Process images (batched, memory-safe) ──
+    preprocessor = ImagePreprocessor(session_id)
+    processed_images: list = []
+    has_pdf_photos = False
+    tasks: list = []
+
+    async def flush_tasks():
+        if tasks:
+            results = await asyncio.gather(*tasks)
+            processed_images.extend(results)
+            tasks.clear()
+            gc.collect()
+
+    for filename, temp_path in case_data.get("images", []):
+        try:
+            with open(temp_path, "rb") as f:
+                fbytes = f.read()
+        except FileNotFoundError:
+            continue
+        if len(fbytes) > 15_000_000:
+            os.remove(temp_path)
+            continue
+        tasks.append(preprocessor.process_file(filename, fbytes))
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        if len(tasks) >= 3:
+            await flush_tasks()
+
+    await flush_tasks()
+    case_data["images"] = []
+    gc.collect()
+
+    # ── Process PDFs embedded photos ──
+    for pdf_info in case_data.get("pdfs", []):
+        if pdf_info["type"] == "unknown":
+            temp_path = pdf_info["temp_path"]
+            try:
+                with open(temp_path, "rb") as f:
+                    pdf_bytes = f.read()
+                reader = PdfReader(io.BytesIO(pdf_bytes))
+                img_count = 0
+                for page_num, page in enumerate(reader.pages):
+                    for img_idx, img_obj in enumerate(page.images):
+                        if img_count >= 4:
+                            break
+                        image_ext = img_obj.name.split(".")[-1] if "." in img_obj.name else "jpg"
+                        img_filename = f"{pdf_info['filename']}_p{page_num+1}_i{img_idx+1}.{image_ext}"
+                        has_pdf_photos = True
+                        tasks.append(preprocessor.process_file(img_filename, img_obj.data))
+                        img_count += 1
+                        if len(tasks) >= 2:
+                            await flush_tasks()
+                    if img_count >= 4:
+                        break
+                del reader
+                gc.collect()
+            except Exception:
+                pass
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    await flush_tasks()
+
+    # ── Parse BJ formulář PDF ──
+    property_data = None
+    for pdf_info in case_data.get("pdfs", []):
+        if pdf_info["type"] == "formular":
+            temp_path = pdf_info["temp_path"]
+            try:
+                with open(temp_path, "rb") as f:
+                    pdf_bytes = f.read()
+                parsed = await asyncio.to_thread(parse_bj_pdf, pdf_bytes)
+                if not parsed.is_empty():
+                    property_data = parsed.to_dict()
+            except Exception as e:
+                print(f"[Batch BJ] Error parsing BJ form PDF in {rev_id}: {e}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            gc.collect()
+            break
+
+    # ── Parse LV PDF ──
+    lv_pdf_path = None
+    selected_parcels = None
+    for pdf_info in case_data.get("pdfs", []):
+        if pdf_info["type"] == "lv":
+            temp_path = pdf_info["temp_path"]
+            try:
+                with open(temp_path, "rb") as f:
+                    pdf_bytes = f.read()
+                lv_parsed = await asyncio.to_thread(parse_lv, pdf_bytes)
+                lv_data = lv_parsed.to_dict()
+                lv_path = os.path.join(session_dir, "lv.pdf")
+                with open(lv_path, "wb") as f:
+                    f.write(pdf_bytes)
+                lv_pdf_path = lv_path
+                if lv_data and "parcels" in lv_data:
+                    selected_parcels = [p["parcel_number"] for p in lv_data["parcels"]]
+            except Exception as e:
+                print(f"[Batch BJ] Error parsing LV in {rev_id}: {e}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            gc.collect()
+            break
+
+    # ── Save floor area documents ──
+    floor_area_doc_paths = []
+    for pdf_info in case_data.get("pdfs", []):
+        if pdf_info["type"] == "floor_area":
+            temp_path = pdf_info["temp_path"]
+            try:
+                with open(temp_path, "rb") as f:
+                    doc_bytes = f.read()
+                ext = os.path.splitext(pdf_info["filename"])[1].lower()
+                doc_filename = f"floor_area_doc_{len(floor_area_doc_paths)}{ext}"
+                doc_path = os.path.join(session_dir, doc_filename)
+                with open(doc_path, "wb") as f:
+                    f.write(doc_bytes)
+                floor_area_doc_paths.append(doc_path)
+            except Exception as e:
+                print(f"[Batch BJ] Error saving floor doc in {rev_id}: {e}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    # Extract address & year from BJ property data
+    property_address = ""
+    year_built = None
+    if property_data:
+        property_address = property_data.get("adresa", "") or ""
+        try:
+            year_built = int(property_data.get("rok_dokonceni_budovy", "") or "0") or None
+        except (ValueError, TypeError):
+            pass
+
+    case = {
+        "case_id": case_id,
+        "session_id": session_id,
+        "rev_id": rev_id,
+        "pipeline_type": "bj",
+        "status": "pending",
+        "images": [img.to_dict() for img in processed_images],
+        "property_data": property_data,
+        "property_address": property_address,
+        "address": property_address,
+        "year_built": year_built,
+        "lv_pdf_path": lv_pdf_path,
+        "floor_area_doc_paths": floor_area_doc_paths,
+        "selected_parcels": selected_parcels,
+        "has_pdf_photos": has_pdf_photos,
+        "file_counts": {
+            "images": len(processed_images),
+            "pdfs": len(case_data.get("pdfs", [])),
+        },
+    }
+
+    del processed_images
+    gc.collect()
+    return case
+
+
 async def process_batch_case(
     batch: BatchSession,
     case: dict,
@@ -362,8 +543,12 @@ async def process_batch_case(
         "timestamp": time.time(),
     })
 
-    # Create orchestrator for this case
-    orchestrator = PipelineOrchestrator(session_id, model_name=batch.model)
+    # Create orchestrator for this case based on pipeline type
+    is_bj = batch.pipeline_type == "bj"
+    if is_bj:
+        orchestrator = BJPipelineOrchestrator(session_id, model_name=batch.model)
+    else:
+        orchestrator = PipelineOrchestrator(session_id, model_name=batch.model)
 
     # Attach batch WS connections to orchestrator so agent-level events are forwarded too
     orchestrator.active_connections = list(batch.active_connections)
@@ -380,6 +565,9 @@ async def process_batch_case(
         "has_pdf_photos": case.get("has_pdf_photos", False),
         "custom_prompts": {},
     }
+    # BJ-specific context
+    if is_bj:
+        context["floor_area_doc_paths"] = case.get("floor_area_doc_paths", [])
 
     case_start = time.time()
     try:
@@ -391,6 +579,7 @@ async def process_batch_case(
         result = {
             "session_id": session_id,
             "rev_id": rev_id,
+            "pipeline_type": "bj" if is_bj else "rd",
             "semaphore": "ERROR",
             "semaphore_color": "gray",
             "total_time": round(time.time() - case_start, 2),
@@ -413,6 +602,7 @@ async def process_batch_case(
         "batch_id": batch.batch_id,
         "case_id": case_id,
         "rev_id": rev_id,
+        "session_id": session_id,
         "index": case_index,
         "semaphore": result.get("semaphore", "UNKNOWN"),
         "semaphore_color": result.get("semaphore_color", "gray"),
@@ -505,13 +695,16 @@ async def run_batch(batch: BatchSession, sessions_store: dict, selected_case_ids
             "timestamp": time.time(),
         })
 
-        prepared_case = await prepare_single_case(rev_id, case_data, batch.batch_id)
+        if batch.pipeline_type == "bj":
+            prepared_case = await prepare_single_case_bj(rev_id, case_data, batch.batch_id)
+        else:
+            prepared_case = await prepare_single_case(rev_id, case_data, batch.batch_id)
 
         # Update the placeholder with prepared data
         batch.cases[i].update(prepared_case)
 
-        # Store session data in the global sessions store
-        sessions_store[prepared_case["session_id"]] = {
+        # Store session data in the appropriate sessions store
+        session_entry = {
             "session_id": prepared_case["session_id"],
             "images": prepared_case["images"],
             "year_built": prepared_case.get("year_built"),
@@ -521,6 +714,10 @@ async def run_batch(batch: BatchSession, sessions_store: dict, selected_case_ids
             "selected_parcels": prepared_case.get("selected_parcels"),
             "has_pdf_photos": prepared_case.get("has_pdf_photos", False),
         }
+        if batch.pipeline_type == "bj":
+            session_entry["pipeline_type"] = "bj"
+            session_entry["floor_area_doc_paths"] = prepared_case.get("floor_area_doc_paths", [])
+        sessions_store[prepared_case["session_id"]] = session_entry
 
         # Free raw bytes for this case to save memory
         del batch.raw_cases[rev_id]
@@ -564,14 +761,16 @@ async def run_batch(batch: BatchSession, sessions_store: dict, selected_case_ids
     batch.status = "completed"
     batch.total_time = round(time.time() - batch.start_time, 2)
 
-    # Summary stats
-    semaphore_counts = {"GREEN": 0, "YELLOW": 0, "RED": 0, "ERROR": 0, "UNKNOWN": 0}
+    # Summary stats – use semaphore_color from results (green, orange, red)
+    semaphore_counts = {"green": 0, "orange": 0, "red": 0, "error": 0}
     for result in batch.case_results.values():
-        s = result.get("semaphore", "UNKNOWN").upper()
-        if s in semaphore_counts:
-            semaphore_counts[s] += 1
+        color = result.get("semaphore_color", "").lower()
+        if color in semaphore_counts:
+            semaphore_counts[color] += 1
+        elif result.get("semaphore", "").upper() == "ERROR":
+            semaphore_counts["error"] += 1
         else:
-            semaphore_counts["UNKNOWN"] += 1
+            semaphore_counts["error"] += 1
 
     await batch.broadcast({
         "type": "batch_complete",

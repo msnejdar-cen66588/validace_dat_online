@@ -4,17 +4,12 @@ Wave A (parallel): Strazce, ForenzniAnalytik, Historik, Inspektor
 Wave B (parallel): PorovnavacDokumentu, KatastralniAnalytik, GeoValidator
 Wave C (sequential, depends on all): Strateg
 
-Memory-optimized for Render.com 512 MB:
-  - Agents are lazily created and destroyed after execution
-  - Semaphore(2) limits concurrency within each wave
-  - Aggressive gc.collect() between waves
-  - No preventive sleeps – exponential backoff on 429 is handled inside LLMClient.
+Local execution – full parallelism, no memory constraints.
 """
 import asyncio
 import json
 import time
 import uuid
-import gc
 from typing import Optional
 
 from fastapi import WebSocket
@@ -23,11 +18,11 @@ from agents.base import AgentStatus, AgentResult
 
 
 # Wave definitions – order matters for frontend display
-WAVE_A = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor"]
+WAVE_A = ["Strazce", "ForenzniAnalytik", "Historik", "Inspektor", "GDPRValidator"]
 WAVE_B = ["PorovnavacDokumentu", "KatastralniAnalytik", "GeoValidator"]
 WAVE_C = ["Strateg"]
 
-# Lazy import map – avoids loading all agent modules at import time
+# Lazy import map
 _AGENT_FACTORY = {
     "Strazce": ("agents.strazce", "StrazceAgent"),
     "ForenzniAnalytik": ("agents.forenzni_analytik", "ForenzniAnalytikAgent"),
@@ -37,6 +32,7 @@ _AGENT_FACTORY = {
     "PorovnavacDokumentu": ("agents.porovnavac_dokumentu", "PorovnavacDokumentuAgent"),
     "KatastralniAnalytik": ("agents.katastralni_analytik", "KatastralniAnalytikAgent"),
     "Strateg": ("agents.strateg", "StrategAgent"),
+    "GDPRValidator": ("agents.gdpr_validator", "GDPRValidatorAgent"),
 }
 
 
@@ -52,8 +48,7 @@ def _create_agent(name: str, model_name: str):
 class PipelineOrchestrator:
     """Orchestrates the parallel-wave execution of all validation agents.
 
-    Memory-optimised: agents are created on demand, executed, results saved,
-    and the agent instance is discarded immediately to free RAM.
+    Local mode – all agents in a wave run fully in parallel, no concurrency limits.
     """
 
     def __init__(self, session_id: str, model_name: str = "gemini"):
@@ -61,13 +56,10 @@ class PipelineOrchestrator:
         self.pipeline_id = str(uuid.uuid4())[:8]
         self.model_name = model_name
 
-        # No agents pre-allocated – they are created lazily in _run_agent
         self.agent_order = WAVE_A + WAVE_B + WAVE_C
         self.active_connections: list[WebSocket] = []
         self.is_running = False
         self.results: dict[str, dict] = {}
-        # Limit concurrency to 2 agents at a time to prevent Render OOM (512 MB)
-        self.semaphore = asyncio.Semaphore(2)
 
     async def broadcast(self, message: dict):
         """Broadcast a message to all WebSocket connections."""
@@ -111,49 +103,41 @@ class PipelineOrchestrator:
             "timestamp": time.time(),
         })
 
-    # ── Core agent runner (lazy init + teardown) ──────────────────────────
+    # ── Core agent runner ─────────────────────────────────────────────────
 
     async def _run_agent(self, agent_name: str, context: dict, agent_results: dict) -> AgentResult:
-        """Create an agent, run it inside the semaphore, save result, destroy agent."""
+        """Create an agent, run it, save result."""
         await self._notify_status(agent_name, "processing")
-        await self._notify_log(agent_name, f"Agent {agent_name} čeká ve frontě...")
+        await self._notify_log(agent_name, f"Agent {agent_name} se spouští...")
 
         run_context = {**context, "agent_results": dict(agent_results)}
 
-        async with self.semaphore:
-            await self._notify_log(agent_name, f"Agent {agent_name} se spouští...")
+        agent = _create_agent(agent_name, self.model_name)
 
-            # Lazy-create agent
-            agent = _create_agent(agent_name, self.model_name)
+        if context.get("custom_prompts", {}).get(agent_name):
+            agent.system_prompt = context["custom_prompts"][agent_name]
 
-            if context.get("custom_prompts", {}).get(agent_name):
-                agent.system_prompt = context["custom_prompts"][agent_name]
+        try:
+            result = await agent.execute(run_context)
+        except Exception as exc:
+            result = AgentResult(
+                status=AgentStatus.FAIL,
+                summary=f"Chyba: {exc}",
+                errors=[str(exc)],
+            )
 
-            try:
-                result = await agent.execute(run_context)
-            except Exception as exc:
-                result = AgentResult(
-                    status=AgentStatus.FAIL,
-                    summary=f"Chyba: {exc}",
-                    errors=[str(exc)],
-                )
+        # Flush logs
+        for log_entry in agent.logs:
+            await self._notify_log(agent_name, log_entry.message, log_entry.level)
 
-            # Flush logs
-            for log_entry in agent.logs:
-                await self._notify_log(agent_name, log_entry.message, log_entry.level)
-
-            elapsed = agent.get_elapsed_time()
-            self.results[agent_name] = agent.to_dict()
-
-            # Destroy agent to free memory
-            del agent
-            gc.collect()
+        elapsed = agent.get_elapsed_time()
+        self.results[agent_name] = agent.to_dict()
 
         await self._notify_status(agent_name, result.status.value, {"elapsed_time": elapsed})
         return result
 
     async def _run_wave(self, wave_name: str, agent_names: list[str], context: dict, agent_results: dict) -> dict:
-        """Run agents in a wave. Semaphore inside _run_agent limits real concurrency."""
+        """Run all agents in a wave fully in parallel (no semaphore)."""
         await self._notify_wave(wave_name, agent_names)
 
         tasks = {
@@ -178,7 +162,6 @@ class PipelineOrchestrator:
                     errors=[str(e)],
                 )
 
-        gc.collect()
         return wave_results
 
     # ── Pipeline execution ────────────────────────────────────────────────
@@ -194,7 +177,6 @@ class PipelineOrchestrator:
             "session_id": self.session_id,
             "timestamp": start_time,
             "agents": self.agent_order,
-            # Let frontend know the wave structure so it can animate correctly
             "waves": {
                 "A": WAVE_A,
                 "B": WAVE_B,
@@ -244,8 +226,6 @@ class PipelineOrchestrator:
 
         elapsed = strategist.get_elapsed_time()
         self.results["Strateg"] = strategist.to_dict()
-        del strategist
-        gc.collect()
 
         await self._notify_status(
             "Strateg",
@@ -286,4 +266,3 @@ class PipelineOrchestrator:
             "is_running": self.is_running,
             "agents": self.results,
         }
-

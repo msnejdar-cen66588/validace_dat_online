@@ -14,3 +14,7 @@ httpx>=0.27.0
 pypdf>=5.1.0
 fpdf2>=2.8.1
 apify-client>=1.8.0
+
+# Photo quality analysis (SEMAFOR methodology)
+numpy>=2.0.0
+scipy>=1.14.0

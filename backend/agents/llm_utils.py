@@ -5,7 +5,7 @@ import os
 import base64
 from typing import Optional, List, Any, Union
 import httpx
-from config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+from config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_API_VERSION, HTTPX_PROXY, HTTPX_VERIFY
 
 def robust_json_parse(text: str) -> dict:
     """Attempt to parse JSON, fixing common LLM formatting errors and truncated outputs."""
@@ -102,6 +102,9 @@ class LLMClient:
         self.model_name = model_name.lower()
         self.gemini_client = None
         
+        # Detekce ČS AI Gateway modelu
+        self._is_cs_gateway = self.model_name == "čs"
+        
         if self._is_gemini():
             if GEMINI_API_KEY:
                 from google import genai
@@ -110,8 +113,14 @@ class LLMClient:
             # Any non-Gemini model goes through OpenAI-compatible endpoint
             self.openai_api_key = OPENAI_API_KEY
             self.openai_base_url = OPENAI_BASE_URL
-            # Use the exact model name provided (e.g. gpt-4o, gpt-4o-mini, o3-mini)
-            self.openai_model = self.model_name if self.model_name != "openai" else OPENAI_MODEL
+            self.openai_api_version = OPENAI_API_VERSION
+            # ČS gateway uses gpt-4o via OPENAI_MODEL config
+            if self._is_cs_gateway:
+                self.openai_model = OPENAI_MODEL  # gpt-4o from .env
+            elif self.model_name != "openai":
+                self.openai_model = self.model_name
+            else:
+                self.openai_model = OPENAI_MODEL
 
     def _is_gemini(self) -> bool:
         return "gemini" in self.model_name
@@ -279,15 +288,30 @@ class LLMClient:
         if response_mime_type == "application/json":
             payload["response_format"] = {"type": "json_object"}
 
-        headers = {
-            "Authorization": f"Bearer {self.openai_api_key}",
-            "Content-Type": "application/json"
-        }
+        # Sestavení hlaviček – ČS AI Gateway používá Ocp-Apim-Subscription-Key
+        if self._is_cs_gateway:
+            headers = {
+                "Ocp-Apim-Subscription-Key": self.openai_api_key,
+                "Content-Type": "application/json"
+            }
+        else:
+            headers = {
+                "Authorization": f"Bearer {self.openai_api_key}",
+                "api-key": self.openai_api_key,
+                "Content-Type": "application/json"
+            }
 
-        verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
-        url = f"{self.openai_base_url.rstrip('/')}/chat/completions"
+        verify_ssl = HTTPX_VERIFY
+        # Sestavení URL – ČS gateway potřebuje /chat/completions?api-version=...
+        base = self.openai_base_url.rstrip('/')
+        if "chat/completions" not in base:
+            base = f"{base}/chat/completions"
+        if self._is_cs_gateway and self.openai_api_version:
+            url = f"{base}?api-version={self.openai_api_version}"
+        else:
+            url = base
 
-        async with httpx.AsyncClient(timeout=120.0, verify=verify_ssl, http2=False) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=verify_ssl, http2=False, proxy=HTTPX_PROXY) as client:
             max_retries = 4
             last_err = None
             

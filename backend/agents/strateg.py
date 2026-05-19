@@ -1,10 +1,9 @@
-"""Agent 5: Strateg – Aggregation Logic & Routing.
+"""Agent 5: Strateg – Aggregation Logic & Routing (SEMAFOR methodology).
 
-Final decision-maker:
-- Tracks precedence: BR-G4 (completeness) has highest priority
-- Warning counting: 0 = ONLINE, 1-2 = SUPERVISED, 3+ or any FAIL = RETURN TO CLIENT
-- Compares AI result vs user input using 2D matrix
-- Generates human-readable report via Gemini
+Final decision-maker per SEMAFOR rules:
+- 🟢 ONLINE: 0 FAIL, 0 WARN (or only INFO-level)
+- 🟡 SUPERVISED: 0 FAIL, 1+ WARN
+- 🔴 VRÁTIT KLIENTOVI: ANY FAIL from ANY agent
 """
 import json
 from agents.base import BaseAgent, AgentResult, AgentStatus
@@ -17,7 +16,7 @@ from config import (
 REPORT_PROMPT = """Jsi senior analytik nemovitostí. Na základě výsledků automatické validace napiš stručný, čitelný report.
 
 Piš česky, profesionálně ale srozumitelně – jako by to psal zkušený kolega pro svého nadřízeného.
-Nepoužívej technický žargon. Nepiš o „agentech" – piš o kontrolách a zjištěních.
+Nepoužívej technický žargon. Nepiš o „agentech\" – piš o kontrolách a zjištěních.
 
 STRUKTURA REPORTU:
 1. **Shrnutí** (2-3 věty – celkový verdikt, nejdůležitější zjištění)
@@ -30,14 +29,14 @@ STRUKTURA REPORTU:
 
 Piš stručně – každá sekce max 2-3 věty.
 Pokud jsou problémy, jasně je pojmenuj. Pokud je vše v pořádku, řekni jasně „bez nálezu".
-Nepiš "Agent zjistil" ale "Bylo ověřeno" nebo "Kontrola ukázala" apod.
+Nepiš \"Agent zjistil\" ale \"Bylo ověřeno\" nebo \"Kontrola ukázala\" apod.
 
 Vrať POUZE text reportu, bez markdownu ani JSON.
 """
 
 
 class StrategAgent(BaseAgent):
-    """Agent 5: Strateg - final aggregation and routing decision."""
+    """Agent 5: Strateg - final aggregation and routing decision per SEMAFOR methodology."""
 
     def __init__(self, model_name: str = "gemini"):
         super().__init__(
@@ -56,12 +55,14 @@ class StrategAgent(BaseAgent):
         historian = agent_results.get("Historik")
         inspector = agent_results.get("Inspektor")
         geovalidator = agent_results.get("GeoValidator")
+        gdpr = agent_results.get("GDPRValidator")
 
         self.log("Agregace výsledků všech kontrol...")
 
         # Count warnings and fails
         total_warns = 0
         has_fail = False
+        failing_agents = []
         all_warnings = []
         all_errors = []
         agent_summaries = {}
@@ -83,29 +84,19 @@ class StrategAgent(BaseAgent):
             all_errors.extend(result.errors)
             if result.status == AgentStatus.FAIL:
                 has_fail = True
+                failing_agents.append(name)
                 self.log(f"FAIL: {name} – {result.summary}", "error")
             elif result.warnings:
                 self.log(f"WARN: {name} – {len(result.warnings)} varování", "warn")
             else:
                 self.log(f"OK: {name}")
 
-        # Priority check: Strazce FAIL is blocking
-        guardian_fail = guardian and guardian.status == AgentStatus.FAIL
-        if guardian_fail:
-            self.log("BLOKUJÍCÍ: Neúplná nebo neaktuální fotodokumentace", "error")
-
-        # Check photo actuality separately
-        photos_not_current = (
-            guardian_fail and
-            guardian.details and
-            not guardian.details.get("are_photos_current", True)
-        )
-
+        # Effective age
         effective_age = None
         if historian and historian.details.get("effective_age") is not None:
             effective_age = historian.details["effective_age"]
 
-        # Determine final category
+        # Final category from Historik
         final_category = None
         if historian and historian.category is not None:
             final_category = historian.category
@@ -114,27 +105,64 @@ class StrategAgent(BaseAgent):
         inspektor_fail = inspector and inspector.status == AgentStatus.FAIL
         if inspektor_fail:
             final_category = 5
-            has_fail = True
-            self.log(f"Kritický nález inspektora: {inspector.summary}", "error")
 
-        # ── Semaphore decision tree ────────────────────────────────────────────
-        # Priority: photo completeness/actuality > property condition > general warnings
-        if guardian_fail and photos_not_current:
-            semaphore = "VRÁTIT KLIENTOVI"
-            semaphore_color = "red"
-            semaphore_reason = "Fotodokumentace není aktuální nebo nemá platný EXIF. Vyžádejte od klienta novou fotodokumentaci."
-        elif guardian_fail:
-            semaphore = "VRÁTIT KLIENTOVI"
-            semaphore_color = "red"
-            semaphore_reason = "Fotodokumentace je neúplná nebo vykazuje chyby metadat. Tuto nemovitost nelze ocenit online bez správných fotek."
-        elif inspektor_fail or has_fail or total_warns >= 3:
+        # ── SEMAFOR decision tree — per methodology ────────────────────────────
+        #
+        # 🟡 SUPERVISED (Nevyhovuje online):
+        #     - Inspektor FAIL (nemovitost nevhodná pro online ocenění)
+        #     - ForenzníAnalytik FAIL (manipulace fotek)
+        #     - GeoValidator FAIL (GPS >1000m)
+        #     - KatastralniAnalytik FAIL
+        #     - PorovnavacDokumentu FAIL (rozpor formulář vs realita u RD)
+        #     - 0 FAIL, ale 1+ WARN
+        #
+        # 🔴 VRÁTIT KLIENTOVI (Chybí podklady):
+        #     - Pouze pokud by šlo online, ale chybí dokumentace!
+        #     - Strážce FAIL (neúplná/neaktuální fotodokumentace)
+        #     - GDPR FAIL (obličeje na fotkách)
+        #
+        # 🟢 ONLINE: 0 FAIL, 0 WARN
+        #
+
+        # Agenti, jejichž selhání znamená, že nemovitost prostě NEMŮŽE jít online (-> SUPERVISED)
+        agents_blocking_online = {"Inspektor", "ForenzniAnalytik", "GeoValidator", "Historik", "KatastralniAnalytik", "PorovnavacDokumentu"}
+        
+        # Agenti, jejichž selhání znamená chybnou/chybějící dokumentaci (-> VRÁTIT KLIENTOVI)
+        agents_missing_docs = {"Strazce", "GDPRValidator"}
+
+        is_ineligible_for_online = any(a in failing_agents for a in agents_blocking_online)
+        is_missing_docs = any(a in failing_agents for a in agents_missing_docs)
+
+        if is_ineligible_for_online:
             semaphore = "SUPERVISED"
             semaphore_color = "orange"
-            semaphore_reason = "Zjištěny nesrovnalosti nebo technické problémy. Případ vyžaduje manuální přezkoumání supervizorem."
+            fail_reasons = []
+            for name in failing_agents:
+                if name in agents_blocking_online:
+                    summary = agent_summaries.get(name, {}).get("summary", "")
+                    fail_reasons.append(f"{name}: {summary}")
+            semaphore_reason = f"Nemovitost vyžaduje dohled pracovníka (nesplňuje kritéria pro online): {' | '.join(fail_reasons)}"
+
+        elif is_missing_docs:
+            semaphore = "VRÁTIT KLIENTOVI"
+            semaphore_color = "red"
+            fail_reasons = []
+            for name in failing_agents:
+                if name in agents_missing_docs:
+                    summary = agent_summaries.get(name, {}).get("summary", "")
+                    if name == "Strazce":
+                        fail_reasons.append(f"Fotodokumentace je neúplná nebo nevyhovující: {summary}")
+                    elif name == "GDPRValidator":
+                        fail_reasons.append(f"GDPR problém (osoby na fotkách): {summary}")
+            semaphore_reason = " | ".join(fail_reasons)
+
         elif total_warns >= 1:
             semaphore = "SUPERVISED"
             semaphore_color = "orange"
-            semaphore_reason = "Online ocenění je možné, ale výsledky vyžadují manuální přezkoumání supervizorem kvůli drobným varováním."
+            semaphore_reason = (
+                f"Online ocenění je možné, ale výsledky vyžadují manuální přezkoumání "
+                f"supervizorem ({total_warns} varování)."
+            )
         else:
             semaphore = "ONLINE"
             semaphore_color = "green"
@@ -164,6 +192,7 @@ class StrategAgent(BaseAgent):
                 "final_category": final_category,
                 "total_warnings": total_warns,
                 "has_fail": has_fail,
+                "failing_agents": failing_agents,
                 "human_report": human_report,
                 "agent_summaries": agent_summaries,
             },
@@ -210,8 +239,9 @@ class StrategAgent(BaseAgent):
                 max_output_tokens=1500,
             )
 
-            ai_result = robust_json_parse(response_text)
-            self.log("Strateg aggregation complete.", "info")
+            # Response is plain text report (not JSON)
+            report = response_text.strip() if response_text else self._fallback_report(agent_summaries, semaphore, category)
+            self.log("Strateg report vygenerován.", "info")
             return report
 
         except Exception as e:

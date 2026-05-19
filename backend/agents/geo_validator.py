@@ -16,18 +16,18 @@ import httpx
 
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient, robust_json_parse
-from config import GEMINI_API_KEY, GEMINI_MODEL, MAPY_CZ_API_KEY, UPLOAD_DIR
+from config import GEMINI_API_KEY, GEMINI_MODEL, MAPY_CZ_API_KEY, UPLOAD_DIR, GPS_DISTANCE_PASS_M, GPS_DISTANCE_FAIL_M
 
-# Max distance in meters before a photo is flagged
-DISTANCE_THRESHOLD_WARN = 500   # 500 m warning
-DISTANCE_THRESHOLD_FAIL = 2000  # 2 km fail
+# Max distance thresholds from SEMAFOR methodology
+DISTANCE_THRESHOLD_WARN = GPS_DISTANCE_PASS_M    # >50 m → warning
+DISTANCE_THRESHOLD_FAIL = GPS_DISTANCE_FAIL_M    # >1000 m → fail
 
 MAPY_API_BASE = "https://api.mapy.com"
 
 COMPARISON_PROMPT = """Jsi expert na vizuální porovnávání nemovitostí.
 
 Dostáváš DVĚ fotografie:
-1. **Nahrané foto** – fotka rodinného domu dodaná klientem (pohled z ulice / přední fasáda).
+1. **Nahrané foto** – fotka exteriéru nemovitosti (rodinného domu nebo bytové budovy) dodaná klientem (pohled z ulice / přední fasáda).
 2. **Panorama z Mapy.cz** – automaticky stažená panorama (street view) ze souřadnic nemovitosti.
 
 TVŮJ ÚKOL:
@@ -44,7 +44,7 @@ STRUKTURA ODPOVĚDI (JSON):
 }
 
 PRAVIDLA:
-- Pokud panorama ukazuje jiný dům nebo je zjevně jiná lokace → "neshoda".
+- Pokud panorama ukazuje jinou budovu nebo je zjevně jiná lokace → "neshoda".
 - Pokud se barva, tvar, střecha a celkový dojem shodují → "shoda".
 - Pokud jsou podobné ale nejsi si jistý (jiný úhel, roční období) → "možná_shoda".
 - Vždy popiš KONKRÉTNĚ co vidíš na obou fotkách.
@@ -53,16 +53,16 @@ PRAVIDLA:
 
 FRONT_PHOTO_SELECTION_PROMPT = """Jsi expert na klasifikaci fotografií nemovitostí.
 
-TVŮJ ÚKOL: Ze sady fotografií vyber tu jednu, která NEJLÉPE ukazuje PŘEDNÍ FASÁDU / POHLED Z ULICE na rodinný dům.
+TVŮJ ÚKOL: Ze sady fotografií vyber tu jednu, která NEJLÉPE ukazuje PŘEDNÍ FASÁDU / POHLED Z ULICE na nemovitost (rodinný dům nebo bytovou budovu).
 
 PRAVIDLA:
-- VŽDY vyber fotografii exteriéru domu – pohled zvenku na budovu.
+- VŽDY vyber fotografii exteriéru budovy – pohled zvenku na budovu.
 - Ideálně přední fasádu (vstupní dveře, přední stěna domu viditelná z ulice).
 - Pokud přední fasáda není k dispozici, vyber boční nebo zadní exteriér.
 - NIKDY nevyber interiérovou fotku (kuchyň, obývák, ložnice, koupelna, chodba).
-- NIKDY nevyber detail (zblízka okno, střecha, zeď) – musí být vidět celý dům nebo jeho podstatná část.
-- NIKDY nevyber fotku pozemku/zahrady bez viditelného domu.
-- Pokud ŽÁDNÁ fotka neukazuje exteriér domu, vrať "photo_id": null.
+- NIKDY nevyber detail (zblízka okno, střecha, zeď) – musí být vidět celá budova nebo její podstatná část.
+- NIKDY nevyber fotku pozemku/zahrady bez viditelné budovy.
+- Pokud ŽÁDNÁ fotka neukazuje exteriér budovy, vrať "photo_id": null.
 
 Vrať POUZE JSON:
 {
@@ -139,7 +139,8 @@ class GeoValidatorAgent(BaseAgent):
         session_id = context.get("session_id", "unknown")
 
         # Strazce classifications (used to find the street-facing photo)
-        guardian_result = context.get("agent_results", {}).get("Strazce")
+        # Supports both RD (Strazce) and BJ (StrazceBJ) pipeline
+        guardian_result = context.get("agent_results", {}).get("Strazce") or context.get("agent_results", {}).get("StrazceBJ")
         guardian_classifications = []
         if guardian_result and guardian_result.details:
             guardian_classifications = guardian_result.details.get("classifications", [])
@@ -480,7 +481,12 @@ class GeoValidatorAgent(BaseAgent):
            from ALL images — this guarantees we never accidentally pick an interior shot.
         """
         # ── Tier 1: Strazce classifications ──
-        target_categories = ["EXTERIER_PREDNI", "EXTERIER_BOCNI", "EXTERIER_ZADNI"]
+        # RD categories: EXTERIER_PREDNI, EXTERIER_BOCNI, EXTERIER_ZADNI
+        # BJ categories: EXTERIER_BUDOVA, EXTERIER_CISLO_POPISNE
+        target_categories = [
+            "EXTERIER_PREDNI", "EXTERIER_BUDOVA", "EXTERIER_CISLO_POPISNE",
+            "EXTERIER_BOCNI", "EXTERIER_ZADNI",
+        ]
 
         for cat in target_categories:
             for cl in classifications:
@@ -500,9 +506,11 @@ class GeoValidatorAgent(BaseAgent):
 
         try:
             from google.genai import types
-            parts = [f"Máš {len(images)} fotografií. Vyber tu, která nejlépe ukazuje PŘEDNÍ EXTERIÉR rodinného domu (pohled z ulice).\n\n"]
+            # Limit to 6 photos to avoid overloading the model
+            photos_to_check = images[:6]
+            parts = [f"Máš {len(photos_to_check)} fotografií. Vyber tu, která nejlépe ukazuje PŘEDNÍ EXTERIÉR nemovitosti (rodinného domu nebo bytové budovy - pohled z ulice).\n\n"]
 
-            for img in images:
+            for img in photos_to_check:
                 try:
                     with open(img["processed_path"], "rb") as f:
                         image_bytes = f.read()
@@ -515,26 +523,34 @@ class GeoValidatorAgent(BaseAgent):
                 system_instruction=FRONT_PHOTO_SELECTION_PROMPT,
                 contents=parts,
                 response_mime_type="application/json",
-                max_output_tokens=300,
+                max_output_tokens=500,
             )
 
-            result = robust_json_parse(response_text)
-            selected_id = result.get("photo_id")
-            reason = result.get("reason", "")
+            if response_text and response_text.strip():
+                self.log(f"AI výběr foto: odpověď {len(response_text)} znaků")
+                result = robust_json_parse(response_text)
+                selected_id = result.get("photo_id")
+                reason = result.get("reason", "")
 
-            if selected_id:
-                self.log(f"AI vybrala foto: {selected_id} – {reason}")
-                for img in images:
-                    if img.get("id") == selected_id:
-                        return img.get("processed_path"), selected_id
-
-            self.log("AI nenašla vhodnou exteriérovou fotku.", "warn")
-            return None, None
+                if selected_id:
+                    self.log(f"AI vybrala foto: {selected_id} – {reason}")
+                    for img in images:
+                        if img.get("id") == selected_id:
+                            return img.get("processed_path"), selected_id
+            else:
+                self.log("AI výběr foto: prázdná odpověď", "warn")
 
         except Exception as e:
             self.log(f"Chyba AI výběru fotky: {e}", "warn")
-            return None, None
 
+        # ── Tier 3: Fallback – just use first available photo ──
+        # Better to compare with ANY photo than to skip comparison entirely
+        if images:
+            fallback = images[0]
+            self.log(f"Fallback: použiji první foto '{fallback['id']}' pro porovnání s panoramou.", "warn")
+            return fallback.get("processed_path"), fallback["id"]
+
+        return None, None
     # ─── Visual comparison via Gemini ──────────────────────────────────
     async def _compare_visually(
         self, uploaded_path: str, panorama_path: str, photo_id: str | None,
@@ -549,6 +565,8 @@ class GeoValidatorAgent(BaseAgent):
             with open(panorama_path, "rb") as f:
                 panorama_bytes = f.read()
 
+            self.log(f"Porovnávám: foto ({len(uploaded_bytes)} B) vs panorama ({len(panorama_bytes)} B)")
+
             parts = [
                 "Porovnej tyto dvě fotografie rodinného domu:\n\n",
                 "FOTO 1 – Nahrané foto klientem:\n",
@@ -562,16 +580,28 @@ class GeoValidatorAgent(BaseAgent):
                 system_instruction=self.system_prompt,
                 contents=parts,
                 response_mime_type="application/json",
-                max_output_tokens=1500,
+                max_output_tokens=2000,
             )
 
+            if not response_text or not response_text.strip():
+                self.log("Vizuální porovnání: AI vrátila prázdnou odpověď.", "warn")
+                return None
+
+            self.log(f"Vizuální porovnání: odpověď {len(response_text)} znaků")
+
             result = robust_json_parse(response_text)
+            if not result or not result.get("match_verdict"):
+                self.log(f"Vizuální porovnání: parsing selhal nebo chybí match_verdict. Raw: {response_text[:300]}", "warn")
+                return None
+
             self.log(f"Vizuální verdikt: {result.get('match_verdict', '?')} "
                      f"(confidence: {result.get('confidence', '?')})")
             return result
 
         except Exception as e:
             self.log(f"Chyba vizuálního porovnání: {e}", "warn")
+            import traceback
+            self.log(traceback.format_exc(), "error")
             return None
 
     # ─── Season estimation from visual cues ────────────────────────────
@@ -579,8 +609,8 @@ class GeoValidatorAgent(BaseAgent):
         """Estimate season from photo content when EXIF dates are missing."""
         try:
             from google.genai import types
-            # POUZE 3 nejlepší fotky (kvůli OOM Render limitům - 512MB RAM)
-            photos_to_send = images[:3]
+            # Send up to 8 photos for season estimation
+            photos_to_send = images[:8]
             parts = [
                 f"Odhadni roční období z těchto {len(photos_to_send)} fotografií rodinného domu.\n"
                 f"Dnešní datum: {datetime.now().strftime('%d.%m.%Y')}.\n\n"

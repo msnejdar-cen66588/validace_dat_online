@@ -32,21 +32,21 @@ Na základě VŠECH výsledků zvol finální SEMAFOR:
    - Dokument podlahové plochy je akceptovatelný a plocha odpovídá
    - Žádné vysoké riziko z LV
 
-🟡 **SUPERVISED** – Některé nesrovnalosti vyžadují kontrolu odhadcem.
-   Příklady:
-   - Drobné neshody v porovnání formuláře (typ vytápění, balkón)
-   - Chybí EXIF metadata u některých fotek
-   - Nebylo detekováno ČP na exteriérové fotce
-   - Dokument plochy nebyl nahrán, ale vizuální odhad plochy odpovídá
-   - Středně závažná rizika z LV
-
-🔴 **RETURN** – Závažné problémy, vrátit klientovi.
-   Příklady:
-   - Nedostatečný počet fotek (< 4)
-   - Byt nezpůsobilý k ocenění (verdikt Inspektora = NE)
-   - Podezření na manipulaci fotek
-   - Zásadní neshoda v ploše bytu (formulář vs. dokument vs. vizuální odhad)
+🟡 **SUPERVISED** – Byt nelze ocenit plně online automaticky, vyžaduje dohled nebo manuální ocenění odhadcem.
+   Sem spadají všechny případy, kdy je dokumentace sice v pořádku, ale nemovitost sama o sobě nesplňuje parametry.
+   Příklady (FAIL z odborných agentů):
+   - Byt nezpůsobilý k ocenění (verdikt Inspektora = NE, např. rozestavěno, špatný stav)
+   - Podezření na manipulaci fotek (ForenzniAnalytik = FAIL)
    - Vysoké riziko z LV (zástavy, zákazy zcizení)
+   - GPS nesoulad
+   - Drobné neshody v porovnání formuláře
+
+🔴 **RETURN** – Vrátit klientovi k doplnění (Chybí podklady).
+   Tento stav použij POUZE pokud by byt pravděpodobně šel ocenit online, ale klient nedoložil všechny nutné podklady!
+   Příklady:
+   - Nedostatečná, neaktuální nebo zcela nevyhovující fotodokumentace (StrazceBJ = FAIL)
+   - GDPR problém (detekovány rozpoznatelné obličeje na fotkách)
+   - Nevyhovující, chybějící nebo zcela rozporuplný doklad o podlahové ploše (PorovnavacDokumentuBJ = FAIL)
 
 SPECIFIKA PRO BYTOVÉ JEDNOTKY:
 - Podlahová plocha je KLÍČOVÝ údaj – věnuj zvláštní pozornost porovnání plochy z formuláře, dokumentu a vizuálního odhadu
@@ -200,14 +200,27 @@ class StrategBJAgent(BaseAgent):
         warns = sum(1 for a in agent_summaries.values()
                     if (a.get("status") if isinstance(a, dict) else "") == "warn")
 
-        if fails >= 2:
+        failing_agents = [name for name, a in agent_summaries.items()
+                          if (a.get("status") if isinstance(a, dict) else "") == "fail"]
+
+        agents_blocking_online = {"InspektorBJ", "ForenzniAnalytik", "GeoValidator", "Historik", "KatastralniAnalytik"}
+        agents_missing_docs = {"StrazceBJ", "GDPRValidator", "PorovnavacDokumentuBJ"}
+
+        is_ineligible_for_online = any(a in failing_agents for a in agents_blocking_online)
+        is_missing_docs = any(a in failing_agents for a in agents_missing_docs)
+
+        if is_ineligible_for_online:
+            semaphore, color, status = "SUPERVISED", "yellow", AgentStatus.WARN
+            reasoning = "Rule-based: Nemovitost vyžaduje dohled (nelze plně online)."
+        elif is_missing_docs:
             semaphore, color, status = "RETURN", "red", AgentStatus.FAIL
-        elif fails >= 1:
+            reasoning = "Rule-based: Chybí/nevyhovuje fotodokumentace nebo dokument plochy."
+        elif warns >= 1:
             semaphore, color, status = "SUPERVISED", "yellow", AgentStatus.WARN
-        elif warns >= 3:
-            semaphore, color, status = "SUPERVISED", "yellow", AgentStatus.WARN
+            reasoning = f"Rule-based: 0 fails, {warns} warnings."
         else:
             semaphore, color, status = "ONLINE", "green", AgentStatus.SUCCESS
+            reasoning = "Rule-based: Vše v pořádku."
 
         return AgentResult(
             status=status,
@@ -217,7 +230,7 @@ class StrategBJAgent(BaseAgent):
                 "semaphore": semaphore,
                 "semaphore_color": color,
                 "headline": f"BJ kontrola – {semaphore}",
-                "reasoning": f"Rule-based: {fails} fails, {warns} warnings",
+                "reasoning": reasoning,
                 "key_findings": [],
                 "agent_summaries": agent_summaries,
             },

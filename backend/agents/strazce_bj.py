@@ -1,25 +1,40 @@
 """Agent: StrazceBJ – Completeness Check for Bytová jednotka (apartment).
 
 Validates that the photo set meets the mandatory documentation requirements
-for BJ (bytová jednotka) property valuation:
+for BJ (bytová jednotka) property valuation per SEMAFOR methodology:
 
-1) Aktuální barevné fotografie (minimálně 4, max. stáří 1 měsíc):
-   - Exteriér domu s číslem popisným
-   - Vchod do bytové/nebytové jednotky
-   - Interiér všech místností (kuchyň, pokoje, koupelna, chodba a další)
+1) Aktuální barevné fotografie (minimálně 4):
+   - Blokující kategorie (FAIL): exteriér budovy, kuchyň, koupelna, hlavní pokoj
+   - Eskalační kategorie (WARN): vstup do jednotky, balkón/terasa
 
-2) Dokumenty plochy – handled separately (not by this agent)
+2) Stáří fotografií — 3 pásma:
+   - <90 dní = PASS
+   - 90–180 dní = WARN
+   - >180 dní = FAIL (chybí datum = FAIL)
+
+3) Kvalita fotografií:
+   - Rozlišení min. 1280×720
+   - Detekce rozmazání, tmavosti
+   - >30% nekvalitních = FAIL, 10–30% = WARN
 """
 import json
+import numpy as np
 from datetime import datetime
+from PIL import Image
 from agents.base import BaseAgent, AgentResult, AgentStatus
 from agents.llm_utils import LLMClient, robust_json_parse
-from config import GEMINI_API_KEY, GEMINI_MODEL, BJ_MIN_TOTAL_PHOTOS, BJ_MAX_PHOTO_AGE_DAYS
+from config import (
+    GEMINI_API_KEY, GEMINI_MODEL, BJ_MIN_TOTAL_PHOTOS,
+    PHOTO_AGE_FAIL_DAYS, PHOTO_AGE_WARN_DAYS,
+    PHOTO_QUALITY_FAIL_PERCENT, PHOTO_QUALITY_WARN_PERCENT,
+    MIN_PHOTO_WIDTH, MIN_PHOTO_HEIGHT,
+    MIN_BLUR_SCORE, MIN_BRIGHTNESS, MAX_BRIGHTNESS,
+)
 
 GUARDIAN_BJ_SYSTEM_PROMPT = """Jsi expert na validaci fotografické dokumentace nemovitostí typu Bytová jednotka (BJ) pro účely bankovního ocenění.
 
 POVINNÁ FOTODOKUMENTACE PRO BYTOVOU JEDNOTKU:
-1) Aktuální barevné fotografie (minimálně 4, max. stáří 1 měsíc):
+1) Aktuální barevné fotografie (minimálně 4):
    a) EXTERIÉR BUDOVY — pohled na celou bytovou budovu, ideálně s viditelným číslem popisným (ČP).
    b) VSTUP DO JEDNOTKY — společné prostory domu (chodba, schodiště, výtah) a/nebo vstupní dveře do bytu.
    c) INTERIÉR — fotografie VŠECH místností bytu:
@@ -68,8 +83,46 @@ Odpověz POUZE validním JSON.
 """
 
 
+def _assess_photo_quality_bj(image_path: str) -> dict:
+    """Assess photo quality for BJ: resolution, blur (Laplacian), brightness."""
+    issues = []
+    try:
+        img = Image.open(image_path)
+        w, h = img.size
+
+        # Resolution check
+        if w < MIN_PHOTO_WIDTH and h < MIN_PHOTO_WIDTH:
+            if (w < MIN_PHOTO_WIDTH or h < MIN_PHOTO_HEIGHT) and (w < MIN_PHOTO_HEIGHT or h < MIN_PHOTO_WIDTH):
+                issues.append(f"Nízké rozlišení ({w}×{h}px, min. {MIN_PHOTO_WIDTH}×{MIN_PHOTO_HEIGHT})")
+
+        # Convert to grayscale numpy for blur/brightness
+        gray = np.array(img.convert("L"), dtype=np.float64)
+
+        # Blur detection
+        from scipy.ndimage import laplace
+        lap = laplace(gray)
+        blur_score = lap.var()
+        if blur_score < MIN_BLUR_SCORE:
+            issues.append(f"Rozmazaná fotografie (ostrost={blur_score:.0f}, min.={MIN_BLUR_SCORE:.0f})")
+
+        # Brightness check
+        avg_brightness = gray.mean()
+        if avg_brightness < MIN_BRIGHTNESS:
+            issues.append(f"Příliš tmavá fotografie (jas={avg_brightness:.0f}, min.={MIN_BRIGHTNESS})")
+        elif avg_brightness > MAX_BRIGHTNESS:
+            issues.append(f"Přesvětlená fotografie (jas={avg_brightness:.0f}, max.={MAX_BRIGHTNESS})")
+
+    except Exception as e:
+        issues.append(f"Nelze ověřit kvalitu: {e}")
+
+    return {
+        "is_low_quality": len(issues) > 0,
+        "issues": issues,
+    }
+
+
 class StrazceBJAgent(BaseAgent):
-    """Agent 1 (BJ): Strazce - validates completeness of the photo set for apartments."""
+    """Agent 1 (BJ): Strazce - validates completeness of the photo set per SEMAFOR methodology."""
 
     def __init__(self, model_name: str = "gemini"):
         super().__init__(
@@ -91,13 +144,16 @@ class StrazceBJAgent(BaseAgent):
             return AgentResult(
                 status=AgentStatus.FAIL,
                 summary=f"Nedostatečný počet fotografií: {total} (minimum {BJ_MIN_TOTAL_PHOTOS})",
-                details={"total_photos": total},
+                details={"total_photos": total, "are_photos_current": False},
                 errors=[f"Počet fotografií ({total}) je příliš nízký pro kompletní dokumentaci bytu."],
             )
 
-        # ── EXIF validation (must be < 1 month old for BJ) ──
+        # ── EXIF validation — 3-tier per SEMAFOR methodology ──
+        exif_warnings = []
         exif_errors = []
+        are_photos_current = True
         now = datetime.now()
+
         for img in images:
             meta = img.get("metadata", {})
             cap_date_str = meta.get("capture_date")
@@ -105,6 +161,7 @@ class StrazceBJAgent(BaseAgent):
 
             if not cap_date_str:
                 exif_errors.append(f"Fotografie '{filename}' neobsahuje EXIF metadata s datem pořízení.")
+                are_photos_current = False
                 continue
 
             try:
@@ -115,14 +172,47 @@ class StrazceBJAgent(BaseAgent):
                     cap_date = datetime.strptime(cap_date_str, "%Y:%m:%d")
 
                 age_days = (now - cap_date).days
-                if age_days > BJ_MAX_PHOTO_AGE_DAYS:
-                    exif_errors.append(f"Fotografie '{filename}' je starší než 1 měsíc ({age_days} dní).")
+
+                if age_days > PHOTO_AGE_FAIL_DAYS:
+                    exif_errors.append(f"Fotografie '{filename}' je starší než {PHOTO_AGE_FAIL_DAYS} dní ({age_days} dní).")
+                    are_photos_current = False
+                elif age_days > PHOTO_AGE_WARN_DAYS:
+                    exif_warnings.append(f"Fotografie '{filename}' je starší než {PHOTO_AGE_WARN_DAYS} dní ({age_days} dní).")
             except ValueError:
                 exif_errors.append(f"Nepodařilo se přečíst datum u fotografie '{filename}' ({cap_date_str}).")
+                are_photos_current = False
 
         if exif_errors:
-            self.log(f"Fotodokumentace nevyhovuje EXIF podmínkám (max 1 měsíc).", "warn")
+            self.log(f"EXIF chyby: {len(exif_errors)} fotek.", "error")
+        if exif_warnings:
+            self.log(f"EXIF varování: {len(exif_warnings)} fotek staré 90–180 dní.", "warn")
 
+        # ── Photo quality checks ──
+        self.log("Kontroluji kvalitu fotografií...", "thinking")
+        quality_issues = []
+        low_quality_count = 0
+        for img in images:
+            qr = _assess_photo_quality_bj(img["processed_path"])
+            if qr["is_low_quality"]:
+                low_quality_count += 1
+                filename = img.get("original_filename", img.get("id", "?"))
+                for issue in qr["issues"]:
+                    quality_issues.append(f"'{filename}': {issue}")
+
+        quality_percent = (low_quality_count / total * 100) if total > 0 else 0
+        quality_errors = []
+        quality_warnings = []
+
+        if quality_percent > PHOTO_QUALITY_FAIL_PERCENT:
+            quality_errors.append(
+                f"{low_quality_count} z {total} fotek ({quality_percent:.0f} %) je nekvalitních."
+            )
+        elif quality_percent > PHOTO_QUALITY_WARN_PERCENT:
+            quality_warnings.append(
+                f"{low_quality_count} z {total} fotek ({quality_percent:.0f} %) je nekvalitních."
+            )
+
+        # ── AI classification ──
         self.log("Klasifikuji fotografie bytové jednotky pomocí AI...", "thinking")
 
         if not self.client:
@@ -165,52 +255,62 @@ class StrazceBJAgent(BaseAgent):
                      f"Vstup: {has_vstup}, Balkón: {has_balkon}")
             self.log(f"Místnosti: {', '.join(rooms_found) if rooms_found else 'nezjištěno'}")
 
-            # ── Evaluate completeness ──
+            # ── Evaluate completeness — SEMAFOR methodology ──
             warnings = []
             errors = []
 
-            if exif_errors:
-                warnings.extend(exif_errors)
+            # Propagate EXIF errors and warnings
+            errors.extend(exif_errors)
+            warnings.extend(exif_warnings)
 
-            # Exterior check
+            # Propagate quality errors and warnings
+            errors.extend(quality_errors)
+            warnings.extend(quality_warnings)
+
+            # === BLOKUJÍCÍ KATEGORIE BJ (FAIL pokud chybí) ===
+
+            # 1. Exteriér budovy
             if not has_exterior:
-                errors.append("Chybí exteriérová fotografie bytového domu.")
+                errors.append("BLOKUJÍCÍ: Chybí exteriérová fotografie bytového domu.")
 
+            # Check key rooms — BLOCKING per methodology
+            rooms_lower = [r.lower() for r in rooms_found]
+            rooms_text = " ".join(rooms_lower)
+
+            # 2. Hlavní pokoj (obývák/ložnice)
+            if not any(k in rooms_text for k in ["pokoj", "obýv", "obyvak", "living", "ložnic"]):
+                errors.append("BLOKUJÍCÍ: Chybí fotodokumentace hlavního pokoje (obývací pokoj/ložnice).")
+
+            # 3. Kuchyň
+            if not any(k in rooms_text for k in ["kuchyň", "kuchyn", "kitchen", "kuchyňsk"]):
+                errors.append("BLOKUJÍCÍ: Chybí fotodokumentace kuchyně.")
+
+            # 4. Koupelna
+            if not any(k in rooms_text for k in ["koupeln", "bathroom", "wc"]):
+                errors.append("BLOKUJÍCÍ: Chybí fotodokumentace koupelny.")
+
+            # Interior count check
+            if interior_count < 2:
+                errors.append(
+                    f"Nedostatečný počet interiérových fotek bytu: {interior_count}. "
+                    "Povinné jsou fotografie všech místností."
+                )
+
+            # === ESKALAČNÍ KATEGORIE BJ (WARN pokud chybí) ===
+
+            # ČP
             if not has_cp:
                 warnings.append(
                     "Na žádné fotce nebylo detekováno číslo popisné (ČP). "
                     "Alespoň jedna exteriérová fotka by měla zachycovat ČP."
                 )
 
-            # Entry/common areas check
+            # Vstup do jednotky
             if not has_vstup:
                 warnings.append(
                     "Chybí fotografie vstupu do bytové jednotky "
                     "(společné prostory, chodba domu, vstupní dveře bytu)."
                 )
-
-            # Interior checks
-            if interior_count < 2:
-                errors.append(
-                    f"Nedostatečný počet interiérových fotek bytu: {interior_count}. "
-                    "Povinné jsou fotografie všech místností."
-                )
-            else:
-                rooms_lower = [r.lower() for r in rooms_found]
-                rooms_text = " ".join(rooms_lower)
-
-                missing_rooms = []
-                if not any(k in rooms_text for k in ["kuchyň", "kuchyn", "kitchen", "kuchyňsk"]):
-                    missing_rooms.append("kuchyň")
-                if not any(k in rooms_text for k in ["koupeln", "bathroom", "wc"]):
-                    missing_rooms.append("koupelna")
-                if not any(k in rooms_text for k in ["pokoj", "obýv", "obyvak", "living", "ložnic"]):
-                    missing_rooms.append("obývací pokoj/ložnice")
-
-                if missing_rooms:
-                    warnings.append(
-                        f"Chybí fotodokumentace místností: {', '.join(missing_rooms)}."
-                    )
 
             # Determine status
             if errors:
@@ -258,6 +358,12 @@ class StrazceBJAgent(BaseAgent):
                     "has_balkon_terasa": has_balkon,
                     "interior_rooms_found": rooms_found,
                     "categories_found": categories,
+                    "are_photos_current": are_photos_current,
+                    "photo_quality": {
+                        "low_quality_count": low_quality_count,
+                        "low_quality_percent": round(quality_percent, 1),
+                        "issues": quality_issues[:10],
+                    },
                     "image_metadata": image_metadata,
                 },
                 warnings=warnings,

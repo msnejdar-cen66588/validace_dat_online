@@ -155,19 +155,31 @@ TVŮJ ÚKOL:
    - Plocha sklepa / komory / skladu
    - Plocha garáže / garážového stání
    - Plocha zahrady / předzahrádky
-   Hledej klíčová slova: "podlahová plocha", "výměra", "plocha bytu", "plocha jednotky", "m²", "celková plocha"
-3. VYPOČÍTEJ ZAPOČITATELNOU PLOCHU dle metodiky:
+   Hledej klíčová slova: "podlahová plocha", "výměra", "plocha bytu", "plocha jednotky", "m²", "celková plocha", "skladba"
+
+3. POKUD DOKUMENT OBSAHUJE ROZPIS MÍSTNOSTÍ (skladbu), POVINNĚ OVĚŘ VÝPOČET:
+   ═══════════════════════════════════════════════════════════
+   a) Vypiš KAŽDOU místnost a její plochu přesně tak, jak je v dokumentu.
+   b) Sečti všechny místnosti vlastním výpočtem (krok po kroku).
+   c) Porovnej TVŮJ součet s celkovou plochou uvedenou v dokumentu.
+   d) Pokud se tvůj součet LIŠÍ od uvedené celkové plochy, zapiš to jako NESOULAD.
+      - Uveď, o kolik m² se to liší.
+      - Uveď, které místnosti mohou být příčinou (překlep, zaokrouhlení).
+   e) Výsledek ověření zapiš do pole "verification_result".
+   ═══════════════════════════════════════════════════════════
+
+4. VYPOČÍTEJ ZAPOČITATELNOU PLOCHU dle metodiky:
    - Hlavní plocha bytu (místnosti): koeficient 1.0 (100 %)
    - Vedlejší plocha (balkón, lodžie, terasa, sklep, komora): koeficient 0.5 (50 %)
-   - Garáž: koeficient 0.8 (80 %) – pouze pokud je součástí jednotky
+   - Garáž: koeficient 0.0 (nezapočítává se)
    - Zahrada: koeficient 0.0 (nezapočítává se)
 
    PRAVIDLO PRO VEDLEJŠÍ PLOCHU:
    - Sečti veškerou vedlejší plochu (balkóny, lodžie, terasy, sklepy, komory) a vynásob ji koeficientem 0.5.
    - Započitatelná vedlejší plocha smí být MAXIMÁLNĚ 20 % z hlavní plochy bytu.
    - Příklad: Byt 30 m², terasa 30 m². Terasa po koeficientu (30 * 0.5) = 15 m². Ale maximum je 20 % z 30 m², což je 6 m². Započte se jen 6 m².
-   Započitatelná plocha = Hlavní plocha bytu + MIN(Vedlejší plocha × 0.5, Hlavní plocha bytu × 0.20) + Garáž × 0.8
-4. Posuď VĚROHODNOST – je to formální dokument s právní vahou?
+   Započitatelná plocha = Hlavní plocha bytu + MIN(Vedlejší plocha × 0.5, Hlavní plocha bytu × 0.20)
+5. Posuď VĚROHODNOST – je to formální dokument s právní vahou?
 
 ═══════════════════════════════════════════════════════════════
 VÝSTUP – vrať POUZE validní JSON:
@@ -175,17 +187,30 @@ VÝSTUP – vrať POUZE validní JSON:
 {
   "document_type": "kupní smlouva" | "prohlášení vlastníka" | "vyúčtování služeb" | "evidenční list" | "odhad nemovitosti" | "neznámý" | "neakceptovatelný",
   "is_acceptable": true/false,
-  "extracted_floor_area_m2": 55.0,
+  "extracted_floor_area_m2": 84.80,
+  "room_breakdown": [
+    {"name": "Kuchyně", "area_m2": 7.10},
+    {"name": "Pokoj 1", "area_m2": 20.88},
+    {"name": "Pokoj 2", "area_m2": 21.01},
+    {"name": "Pokoj 3", "area_m2": 16.26},
+    {"name": "Předsíň", "area_m2": 4.70},
+    {"name": "Koupelna s WC", "area_m2": 2.91},
+    {"name": "Komora s kotelnou", "area_m2": 1.34},
+    {"name": "Chodba", "area_m2": 3.34},
+    {"name": "Předsíň 2", "area_m2": 11.96}
+  ],
+  "room_sum_m2": 89.50,
+  "verification_result": "NESOULAD: Součet místností (89.50 m²) neodpovídá celkové ploše v dokumentu (84.80 m²). Rozdíl: 4.70 m². Možná příčina: jedna z předsíní (4.70 m²) může být společný prostor.",
   "area_components": {
-    "byt_m2": 55.0,
-    "balkon_m2": 4.5,
+    "byt_m2": 84.80,
+    "balkon_m2": 0,
     "terasa_m2": 0,
-    "sklep_m2": 3.2,
+    "sklep_m2": 0,
     "garaz_m2": 0,
     "zahrada_m2": 0
   },
-  "zapocitatalna_plocha_m2": 58.85,
-  "zapocitatalna_vypocet": "Byt: 55.0. Vedlejší: (4.5+3.2)*0.5 = 3.85. Limit: 55.0*0.2 = 11.0. 3.85 < 11.0, započte se 3.85. Celkem: 55.0 + 3.85 = 58.85 m²",
+  "zapocitatalna_plocha_m2": 84.80,
+  "zapocitatalna_vypocet": "Byt: 84.80 m². Vedlejší plochy: 0 m². Započitatelná plocha = 84.80 m².",
   "confidence": 0.0-1.0,
   "notes": "Podrobný popis: jaký dokument to je, co v něm stojí, odkud jsi plochu vzal."
 }
@@ -322,19 +347,26 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
             overall_summary = ai_result.get("overall_summary", "")
 
              # ── Floor area document validation ──
-            # All uploaded files are treated as ONE document (e.g. a contract split into multiple PDFs/photos)
+            # Uses dedicated FloorAreaDocumentAgent with two-phase OCR+analysis
             floor_area_results = []
             if floor_area_doc_paths and len(floor_area_doc_paths) > 0:
                 self.log(
-                    f"Ověřuji podklad podlahové plochy ({len(floor_area_doc_paths)} soubor(ů) = 1 dokument)...",
+                    f"Ověřuji podklad podlahové plochy ({len(floor_area_doc_paths)} soubor(ů))...",
                     "thinking",
                 )
                 for dp in floor_area_doc_paths:
                     self.log(f"  Soubor: {dp}")
 
-                # Single AI call with ALL files as one document
-                floor_area_result = await self._validate_floor_area_doc(
-                    floor_area_doc_paths, property_data
+                # Use dedicated FloorAreaDocumentAgent (two-phase: OCR → Analysis)
+                from agents.floor_area_agent import FloorAreaDocumentAgent
+                fa_agent = FloorAreaDocumentAgent(
+                    model_name=self.model_name,
+                    logger=lambda msg, lvl: self.log(f"[FloorArea] {msg}", lvl),
+                )
+                declared_area_str = str(property_data.get("plocha_bytu", "neznámo"))
+                floor_area_result = await fa_agent.analyze(
+                    doc_paths=floor_area_doc_paths,
+                    declared_area=declared_area_str,
                 )
 
                 if floor_area_result:
@@ -390,8 +422,6 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                                     comp_strs.append(f"terasa: {components['terasa_m2']} m²")
                                 if components.get("sklep_m2"):
                                     comp_strs.append(f"sklep: {components['sklep_m2']} m²")
-                                if components.get("garaz_m2"):
-                                    comp_strs.append(f"garáž: {components['garaz_m2']} m²")
                                 if comp_strs:
                                     note_parts.append("Složky: " + ", ".join(comp_strs))
 
@@ -407,6 +437,18 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                                     f"Plocha z dokumentu ({extracted} m²) se neshoduje "
                                     f"s deklarovanou ({declared_num} m²) – odchylka {diff_pct:.0f} %."
                                 )
+
+                            # ── OVERRIDE the visual-estimate "plocha bytu" check ──
+                            # Replace the AI visual estimate with the precise document value
+                            for existing_check in checks:
+                                field_lower = existing_check.get("field", "").lower()
+                                if field_lower in ("plocha bytu", "podlahová plocha", "plocha jednotky"):
+                                    doc_value = f"{zapocit} m²" if zapocit is not None else f"{extracted} m²"
+                                    existing_check["observed"] = f"{doc_value} (z dokumentu: {doc_type})"
+                                    existing_check["match"] = area_match
+                                    existing_check["note"] = " ".join(note_parts)
+                                    break
+
                         except (ValueError, TypeError):
                             checks.append({
                                 "field": doc_label,
@@ -509,11 +551,11 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
             import gc
             from google.genai import types
 
-            # Limit to 5 files max to prevent OOM (512 MB Render)
-            effective_paths = doc_paths[:5]
-            if len(doc_paths) > 5:
+            # Limit to 8 files max to prevent OOM (512 MB Render)
+            effective_paths = doc_paths[:8]
+            if len(doc_paths) > 8:
                 self.log(
-                    f"Omezuji počet souborů plochy z {len(doc_paths)} na 5 (paměťový limit).",
+                    f"Omezuji počet souborů plochy z {len(doc_paths)} na 8 (paměťový limit).",
                     "warn",
                 )
 
@@ -535,11 +577,17 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                 )
 
             parts = [
-                f"Analyzuj tento dokument, který by měl potvrzovat podlahovou plochu bytové jednotky.\n"
-                f"Deklarovaná plocha bytu z formuláře: {declared_area}\n"
+                f"DŮLEŽITÉ: Analyzuj KAŽDOU stránku tohoto dokumentu a hledej údaje o PODLAHOVÉ PLOŠE bytové jednotky.\n"
+                f"Deklarovaná plocha bytu z formuláře klienta: {declared_area}\n"
                 f"{file_count_note}\n"
-                f"Extrahuj VŠECHNY zmíněné plochy (byt, balkón, terasa, sklep, garáž) "
-                f"a VYPOČÍTEJ započitatelnou plochu dle metodiky.\n\n",
+                f"HLEDEJ tyto klíčová slova na VŠECH stránkách:\n"
+                f"- 'celková plocha', 'podlahová plocha', 'plocha jednotky', 'výměra'\n"
+                f"- 'skladba předmětné jednotky', 'skladba bytu'\n"
+                f"- čísla s 'm2' nebo 'm²'\n"
+                f"- seznamy místností s plochami (kuchyně, pokoj, předsíň, koupelna, chodba, komora...)\n\n"
+                f"Pokud dokument obsahuje ROZPIS MÍSTNOSTÍ (skladbu), MUSÍŠ je všechny vypsat do room_breakdown, "
+                f"sečíst a OVĚŘIT, zda součet odpovídá celkové ploše.\n\n"
+                f"Extrahuj plochu a vypočítej započitatelnou plochu dle metodiky.\n\n",
             ]
 
             # Mime type map
@@ -570,11 +618,10 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
                     types.Part.from_bytes(data=doc_bytes, mime_type=mime_type)
                 )
                 if len(valid_paths) > 1:
-                    parts.append(f"(Soubor {i + 1}/{len(valid_paths)}: {os.path.basename(doc_path)})")
+                    parts.append(f"(Stránka {i + 1}/{len(valid_paths)} dokumentu)")
 
                 # Free bytes immediately
                 del doc_bytes
-                gc.collect()
 
             self.log(
                 f"Čtu {len(valid_paths)} soubor(ů) podlahové plochy "
@@ -582,21 +629,34 @@ class PorovnavacDokumentuBJAgent(BaseAgent):
             )
 
             parts.append(
-                "\n\nUrči typ dokumentu, extrahuj plochy, vypočítej započitatelnou plochu a posuď věrohodnost."
+                "\n\nNYNÍ analyzuj všechny stránky výše. "
+                "Najdi CELKOVOU PLOCHU a ROZPIS MÍSTNOSTÍ (pokud existuje). "
+                "Vrať JSON s extracted_floor_area_m2, room_breakdown, verification_result, "
+                "area_components, zapocitatalna_plocha_m2 a zapocitatalna_vypocet. "
+                "NIKDY nevracej extracted_floor_area_m2 jako null, pokud dokument obsahuje jakoukoli informaci o ploše!"
             )
 
             response_text = await self.client.generate_content(
                 system_instruction=FLOOR_AREA_DOC_PROMPT,
                 contents=parts,
                 response_mime_type="application/json",
-                max_output_tokens=3000,
+                max_output_tokens=6000,
             )
 
             # Free parts to release image bytes held by Part objects
             del parts
-            gc.collect()
+
+            # Debug: log raw AI response
+            print(f"[FLOOR_AREA_DEBUG] Raw AI response (first 2000 chars): {response_text[:2000] if response_text else 'EMPTY'}")
 
             result = robust_json_parse(response_text)
+
+            # Debug: log parsed result
+            print(f"[FLOOR_AREA_DEBUG] Parsed result keys: {list(result.keys())}")
+            print(f"[FLOOR_AREA_DEBUG] extracted_floor_area_m2={result.get('extracted_floor_area_m2')}")
+            print(f"[FLOOR_AREA_DEBUG] room_breakdown={result.get('room_breakdown')}")
+            print(f"[FLOOR_AREA_DEBUG] verification_result={result.get('verification_result')}")
+
             zapocit = result.get("zapocitatalna_plocha_m2")
             components = result.get("area_components", {})
             self.log(

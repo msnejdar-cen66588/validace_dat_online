@@ -1,8 +1,11 @@
-"""FastAPI main application – AI Validation Pipeline for Rodinné Domy."""
+"""FastAPI main application – AI Validation Pipeline for Rodinné Domy.
+
+Enterprise-local edition: serves both the API and the static frontend
+from a single Python process on http://127.0.0.1:8000.
+"""
 import os
 import uuid
 import json
-import gc
 import shutil
 import asyncio
 from typing import Optional
@@ -16,8 +19,12 @@ import httpx
 from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
-from config import UPLOAD_DIR, SUPPORTED_EXTENSIONS
+from config import (
+    UPLOAD_DIR, SUPPORTED_EXTENSIONS, STATIC_DIR,
+    ENABLE_MAPS_API, ENABLE_VALUATION, ENABLE_EXTERNAL_SERVICES,
+)
 from preprocessor import ImagePreprocessor
 from orchestrator import PipelineOrchestrator
 from orchestrator_bj import BJPipelineOrchestrator
@@ -48,7 +55,7 @@ app.add_middleware(
 )
 
 # In-memory session store
-MAX_SESSIONS = 5  # Limit concurrent sessions to prevent OOM on 512MB Render
+MAX_SESSIONS = 50  # Local execution – generous limit
 sessions: dict[str, dict] = {}
 orchestrators: dict[str, PipelineOrchestrator] = {}
 pipeline_results: dict[str, dict] = {}
@@ -65,7 +72,7 @@ bj_websockets: dict[str, list[WebSocket]] = {}
 
 
 def _evict_old_sessions(keep_id: str = ""):
-    """Evict oldest sessions when we exceed MAX_SESSIONS to prevent OOM."""
+    """Evict oldest sessions when we exceed MAX_SESSIONS."""
     if len(sessions) <= MAX_SESSIONS:
         return
     # Sort sessions by creation order (dict insertion order in Python 3.7+)
@@ -81,11 +88,10 @@ def _evict_old_sessions(keep_id: str = ""):
         old_dir = os.path.join(UPLOAD_DIR, old_id)
         if os.path.exists(old_dir):
             shutil.rmtree(old_dir, ignore_errors=True)
-        print(f"[Memory] Evicted old session: {old_id}")
-    gc.collect()
+        print(f"Evicted old session: {old_id}")
 
-# Contract analysis session store (limited to save memory on free Render 512MB)
-MAX_CONTRACT_SESSIONS = 3
+# Contract analysis session store
+MAX_CONTRACT_SESSIONS = 20
 contract_sessions: dict[str, dict] = {}
 
 def _cleanup_contract_sessions():
@@ -93,7 +99,6 @@ def _cleanup_contract_sessions():
     while len(contract_sessions) > MAX_CONTRACT_SESSIONS:
         oldest_key = next(iter(contract_sessions))
         del contract_sessions[oldest_key]
-    gc.collect()
 
 
 @app.get("/api/health")
@@ -103,11 +108,11 @@ async def health_check():
 
 @app.get("/api/memory")
 async def memory_info():
-    """Return memory usage info for diagnostics on Render 512MB."""
+    """Return memory usage info for diagnostics."""
     import resource
     rusage = resource.getrusage(resource.RUSAGE_SELF)
     rss_mb = rusage.ru_maxrss / (1024 * 1024)  # macOS returns bytes, Linux returns KB
-    # On Linux (Render), ru_maxrss is in KB
+    # On Linux, ru_maxrss is in KB
     import sys
     if sys.platform == "linux":
         rss_mb = rusage.ru_maxrss / 1024
@@ -220,7 +225,6 @@ async def upload_files(
             with open(pdf_path, "wb") as f:
                 f.write(pdf_bytes)
             del pdf_bytes
-            gc.collect()
 
     # === Handle manual property data (JSON string from frontend) ===
     if not property_data and property_data_json:
@@ -249,7 +253,6 @@ async def upload_files(
             except Exception:
                 pass
             del lv_bytes
-            gc.collect()
 
     # Parse selected parcels
     selected_parcels = None
@@ -274,20 +277,12 @@ async def upload_files(
     preprocessor = ImagePreprocessor(session_id)
     processed = []
 
-    # === Process image files incrementally to save memory ===
+    # === Process image files ===
     has_pdf_photos = False
     
     import asyncio
     
     tasks = []
-    
-    # Funkce projede dávku a ošetří přeplnění RAM na free serveru (v jednu chvíli se zpracují kompresí max 3 bitmapy)
-    async def flush_tasks():
-        if tasks:
-            processed_results = await asyncio.gather(*tasks)
-            processed.extend(processed_results)
-            tasks.clear()
-            gc.collect()  # Free PIL memory after each batch
 
     async def _process_file_to_thread(filename, fbytes):
         res = await preprocessor.process_file(filename, fbytes)
@@ -297,12 +292,7 @@ async def upload_files(
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
-            # Skip files > 15MB to prevent OOM on free tier
-            if len(file_bytes) > 15_000_000:
-                continue
             tasks.append(_process_file_to_thread(f.filename or "unknown", file_bytes))
-            if len(tasks) >= 3:  # batch of 3 OK with downscaling (7MB/img vs 36MB)
-                await flush_tasks()
         elif ext == ".pdf":
             file_bytes = await f.read()
             try:
@@ -310,8 +300,6 @@ async def upload_files(
                 pdf_img_count = 0
                 for page_num, page in enumerate(reader.pages):
                     for img_index, image_file_object in enumerate(page.images):
-                        if pdf_img_count >= 4:  # max 4 images from PDF
-                            break
                         image_bytes = image_file_object.data
                         image_name = image_file_object.name
                         image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
@@ -322,20 +310,15 @@ async def upload_files(
                             has_pdf_photos = True
                             tasks.append(_process_file_to_thread(img_filename, image_bytes))
                             pdf_img_count += 1
-                            if len(tasks) >= 2:
-                                await flush_tasks()
-                    if pdf_img_count >= 4:
-                        break
-                del reader, file_bytes
-                gc.collect()
             except Exception as e:
                 print(f"Error extracting photos from PDF: {e}")
-                pass
         else:
             pass
 
-    # Zbylé soubory mimo troj-dávkování
-    await flush_tasks()
+    # Process all files in parallel
+    if tasks:
+        processed_results = await asyncio.gather(*tasks)
+        processed.extend(processed_results)
 
     if not processed:
         raise HTTPException(status_code=400, detail="No valid image files uploaded.")
@@ -429,10 +412,9 @@ async def start_pipeline(
         except Exception as e:
             print(f"Pipeline error for session {session_id}: {e}")
         finally:
-            # Free orchestrator memory after pipeline completes
+            # Free orchestrator after pipeline completes
             orchestrators.pop(session_id, None)
-            gc.collect()
-            print(f"[Memory] Orchestrator freed for session {session_id}")
+            print(f"Pipeline completed for session {session_id}")
 
     # Dispatch to background
     background_tasks.add_task(run_and_store)
@@ -489,7 +471,6 @@ async def generate_valuation(
     from valuation_pipeline import ValuationPipeline
 
     _evict_old_sessions(keep_id=session_id)
-    gc.collect()
 
     session = sessions.get(session_id, {})
     effective_model = model or session.get("model") or "gemini-3-flash-preview"
@@ -528,8 +509,7 @@ async def generate_valuation(
             print(f"[Valuation] Background task error: {e}")
             traceback.print_exc()
         finally:
-            gc.collect()
-
+            pass
     # Use asyncio.create_task so it shares the event loop with WebSockets
     asyncio.create_task(_run_valuation())
 
@@ -548,7 +528,7 @@ async def get_valuation_result(session_id: str):
 
 @app.get("/api/pipeline/report/{session_id}")
 async def get_pipeline_report(session_id: str):
-    """Generate and return a PDF report for the session."""
+    """Generate and return a PDF report for the session (RD or BJ)."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found.")
     
@@ -560,30 +540,41 @@ async def get_pipeline_report(session_id: str):
     
     try:
         from fastapi.responses import Response
+        import re
         generator = ReportGenerator()
         pdf_bytes = generator.generate_valuation_report(session, result)
         
         # Determine filename based on address
         address = session.get("property_address") or "odhad_nemovitosti"
-        # Sanitize filename (remove special chars, spaces to underscores)
-        import re
+        
+        # If this is from a batch processing, use rev_id
+        if "rev_id" in result:
+            address = str(result["rev_id"])
+
+        # Sanitize filename — ASCII only to prevent Content-Disposition issues
         safe_name = re.sub(r'[^\w\s-]', '', address).strip().replace(' ', '_')
-        if not safe_name:
-            safe_name = "report"
+        # Strip any remaining non-ASCII (Czech diacritics pass \w in Python)
+        safe_name = safe_name.encode('ascii', 'ignore').decode('ascii').strip('_') or "report"
             
         filename = f"{safe_name}.pdf"
         
         return Response(
-            content=pdf_bytes,
+            content=bytes(pdf_bytes),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"attachment; filename={filename}"
+                "Content-Disposition": f'inline; filename="{filename}"'
             }
         )
     except Exception as e:
         import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Chyba při generování PDF: {str(e)}")
+
+
+@app.get("/api/bj/pipeline/report/{session_id}")
+async def get_bj_pipeline_report(session_id: str):
+    """Generate and return a PDF report for a BJ session — delegates to the unified generator."""
+    return await get_pipeline_report(session_id)
 
 
 @app.post("/api/agent/prompt/{session_id}/{agent_name}")
@@ -653,7 +644,7 @@ async def batch_upload(
     """
     batch_id = str(uuid.uuid4())[:8]
 
-    # Read all files and save them to a temporary disk location to prevent OOM
+    # Read all files and save them to a temporary disk location
     batch_dir = os.path.join(UPLOAD_DIR, "batch_temp", batch_id)
     os.makedirs(batch_dir, exist_ok=True)
     
@@ -703,7 +694,6 @@ async def batch_upload(
 
     # Free the map (raw_cases holds refs to temp paths now)
     del file_paths_map
-    gc.collect()
 
     return {
         "batch_id": batch_id,
@@ -737,6 +727,10 @@ async def start_batch_pipeline(
 
     # Optional: only process selected case IDs
     selected_case_ids = body.get("selected_case_ids") if body else None
+
+    # Allow model override at start time
+    if body and body.get("model"):
+        batch.model = body["model"]
 
     # Attach any websockets that connected before start
     if batch_id in batch_websockets:
@@ -798,6 +792,146 @@ async def get_batch_case_result(batch_id: str, case_id: str):
 @app.websocket("/ws/batch/{batch_id}")
 async def batch_websocket_endpoint(websocket: WebSocket, batch_id: str):
     """WebSocket for real-time batch processing updates."""
+    await websocket.accept()
+
+    if batch_id not in batch_websockets:
+        batch_websockets[batch_id] = []
+    batch_websockets[batch_id].append(websocket)
+
+    batch = batch_sessions.get(batch_id)
+    if batch and websocket not in batch.active_connections:
+        batch.active_connections.append(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if batch_id in batch_websockets and websocket in batch_websockets[batch_id]:
+            batch_websockets[batch_id].remove(websocket)
+        if batch and websocket in batch.active_connections:
+            batch.active_connections.remove(websocket)
+
+
+# ── Batch BJ Endpoints ────────────────────────────────────────────────────
+
+
+@app.post("/api/batch-bj/upload")
+async def batch_bj_upload(
+    files: list[UploadFile] = File(...),
+    model: str = Form("gpt-5.4-mini"),
+):
+    """Upload a folder (webkitdirectory) for BJ batch processing.
+    Same as /api/batch/upload but uses BJ pipeline for all cases.
+    """
+    batch_id = str(uuid.uuid4())[:8]
+
+    batch_dir = os.path.join(UPLOAD_DIR, "batch_temp", batch_id)
+    os.makedirs(batch_dir, exist_ok=True)
+
+    file_paths_map: dict[str, str] = {}
+    for f in files:
+        if not f.filename:
+            continue
+        safe_filename = str(uuid.uuid4()) + "_" + os.path.basename(f.filename)
+        safe_path = os.path.join(batch_dir, safe_filename)
+        with open(safe_path, "wb") as out_file:
+            shutil.copyfileobj(f.file, out_file)
+        file_paths_map[f.filename] = safe_path
+
+    if not file_paths_map:
+        raise HTTPException(status_code=400, detail="Žádné soubory nebyly nahrány.")
+
+    raw_cases = group_files_by_subfolder(list(file_paths_map.keys()), file_paths_map, pipeline_type="bj")
+
+    if not raw_cases:
+        raise HTTPException(status_code=400, detail="Nebyly nalezeny žádné podsložky s podklady.")
+
+    batch = BatchSession(batch_id, model=model, pipeline_type="bj")
+    batch.raw_cases = raw_cases
+
+    ordered_rev_ids = sorted(raw_cases.keys())
+    batch.cases = [
+        {
+            "case_id": f"{batch_id}_{rev_id}",
+            "rev_id": rev_id,
+            "status": "pending",
+            "address": "",
+            "session_id": "",
+            "file_counts": {
+                "images": len(raw_cases[rev_id].get("images", [])),
+                "pdfs": len(raw_cases[rev_id].get("pdfs", [])),
+            },
+        }
+        for rev_id in ordered_rev_ids
+    ]
+
+    batch_sessions[batch_id] = batch
+    del file_paths_map
+
+    return {
+        "batch_id": batch_id,
+        "total_cases": len(ordered_rev_ids),
+        "pipeline_type": "bj",
+        "cases": [
+            {
+                "case_id": c["case_id"],
+                "rev_id": c["rev_id"],
+                "session_id": c.get("session_id", ""),
+                "address": c.get("address", ""),
+                "file_counts": c.get("file_counts", {}),
+            }
+            for c in batch.cases
+        ],
+    }
+
+
+@app.post("/api/batch-bj/start/{batch_id}")
+async def start_batch_bj_pipeline(
+    batch_id: str,
+    background_tasks: BackgroundTasks,
+    body: dict = Body(default={}),
+):
+    """Start sequential processing of all BJ cases in a batch."""
+    batch = batch_sessions.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+
+    if batch.status == "processing":
+        raise HTTPException(status_code=400, detail="Batch is already processing.")
+
+    selected_case_ids = body.get("selected_case_ids") if body else None
+
+    # Allow model override at start time
+    if body and body.get("model"):
+        batch.model = body["model"]
+
+    if batch_id in batch_websockets:
+        for ws in batch_websockets[batch_id]:
+            if ws not in batch.active_connections:
+                batch.active_connections.append(ws)
+
+    async def _run():
+        try:
+            await run_batch(batch, sessions, selected_case_ids=selected_case_ids)
+        except Exception as e:
+            import traceback
+            print(f"[Batch BJ] Fatal error: {e}")
+            traceback.print_exc()
+            batch.status = "error"
+
+    background_tasks.add_task(_run)
+
+    return {
+        "status": "started",
+        "batch_id": batch_id,
+        "total_cases": len(batch.cases),
+        "pipeline_type": "bj",
+    }
+
+
+@app.websocket("/ws/batch-bj/{batch_id}")
+async def batch_bj_websocket_endpoint(websocket: WebSocket, batch_id: str):
+    """WebSocket for real-time BJ batch processing updates."""
     await websocket.accept()
 
     if batch_id not in batch_websockets:
@@ -894,7 +1028,7 @@ async def upload_contract(
                 f.write(page.image_data)
             page_image_urls.append(f"/uploads/contract_{session_id}/page_{i}.jpg")
     
-    # Store session (evict old ones to stay within 512MB)
+    # Store session
     _cleanup_contract_sessions()
     contract_sessions[session_id] = {
         "session_id": session_id,
@@ -910,7 +1044,6 @@ async def upload_contract(
     doc.raw_images = []
     for page in doc.pages:
         page.image_data = None
-    gc.collect()
     
     return {
         "session_id": session_id,
@@ -1045,8 +1178,7 @@ def _evict_bj_sessions(keep_id: str = ""):
         old_dir = os.path.join(UPLOAD_DIR, old_id)
         if os.path.exists(old_dir):
             shutil.rmtree(old_dir, ignore_errors=True)
-        print(f"[Memory] Evicted old BJ session: {old_id}")
-    gc.collect()
+        print(f"Evicted old BJ session: {old_id}")
 
 
 @app.post("/api/bj/parse-pdf")
@@ -1094,7 +1226,6 @@ async def upload_bj_files(
             with open(pdf_path, "wb") as f:
                 f.write(pdf_bytes)
             del pdf_bytes
-            gc.collect()
 
     # === Handle manual property data ===
     if not property_data and property_data_json:
@@ -1121,7 +1252,6 @@ async def upload_bj_files(
             except Exception:
                 pass
             del lv_bytes
-            gc.collect()
 
     # === Handle floor area documents (multiple) ===
     floor_area_doc_paths = []
@@ -1133,33 +1263,11 @@ async def upload_bj_files(
                 ext = os.path.splitext(doc.filename)[1].lower()
                 doc_bytes = await doc.read()
 
-                # Compress image-based floor area docs to save memory
-                if ext in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"):
-                    try:
-                        from PIL import Image
-                        img = Image.open(io.BytesIO(doc_bytes))
-                        # Downscale to max 1600px (enough for text extraction)
-                        max_dim = 1600
-                        if max(img.size) > max_dim:
-                            img.thumbnail((max_dim, max_dim), Image.LANCZOS)
-                        # Save as JPEG to reduce size
-                        buf = io.BytesIO()
-                        if img.mode in ("RGBA", "P"):
-                            img = img.convert("RGB")
-                        img.save(buf, format="JPEG", quality=80)
-                        doc_bytes = buf.getvalue()
-                        ext = ".jpg"
-                        del img, buf
-                    except Exception as e:
-                        print(f"[BJ] Could not compress floor area image {idx}: {e}")
-
                 doc_filename = f"floor_area_doc_{idx}{ext}"
                 doc_path = os.path.join(session_dir, doc_filename)
                 with open(doc_path, "wb") as f:
                     f.write(doc_bytes)
                 floor_area_doc_paths.append(doc_path)
-                del doc_bytes
-        gc.collect()
 
     # Parse selected parcels
     selected_parcels = None
@@ -1175,13 +1283,6 @@ async def upload_bj_files(
 
     tasks = []
 
-    async def flush_tasks():
-        if tasks:
-            processed_results = await asyncio.gather(*tasks)
-            processed.extend(processed_results)
-            tasks.clear()
-            gc.collect()
-
     async def _process_file_to_thread(filename, fbytes):
         res = await preprocessor.process_file(filename, fbytes)
         return res
@@ -1191,20 +1292,13 @@ async def upload_bj_files(
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext in SUPPORTED_EXTENSIONS:
             file_bytes = await f.read()
-            if len(file_bytes) > 15_000_000:
-                continue
             tasks.append(_process_file_to_thread(f.filename or "unknown", file_bytes))
-            if len(tasks) >= 3:
-                await flush_tasks()
         elif ext == ".pdf":
             file_bytes = await f.read()
             try:
                 reader = PdfReader(io.BytesIO(file_bytes))
-                pdf_img_count = 0
                 for page_num, page in enumerate(reader.pages):
                     for img_index, image_file_object in enumerate(page.images):
-                        if pdf_img_count >= 4:
-                            break
                         image_bytes = image_file_object.data
                         image_name = image_file_object.name
                         image_ext = image_name.split('.')[-1] if '.' in image_name else "jpg"
@@ -1213,17 +1307,13 @@ async def upload_bj_files(
                             img_filename = f"{f.filename}_str{page_num+1}_obr{img_index+1}.{image_ext}"
                             has_pdf_photos = True
                             tasks.append(_process_file_to_thread(img_filename, image_bytes))
-                            pdf_img_count += 1
-                            if len(tasks) >= 2:
-                                await flush_tasks()
-                    if pdf_img_count >= 4:
-                        break
-                del reader, file_bytes
-                gc.collect()
             except Exception as e:
                 print(f"Error extracting photos from PDF (BJ): {e}")
 
-    await flush_tasks()
+    # Process all files in parallel
+    if tasks:
+        processed_results = await asyncio.gather(*tasks)
+        processed.extend(processed_results)
 
     if not processed:
         raise HTTPException(status_code=400, detail="No valid image files uploaded.")
@@ -1311,8 +1401,7 @@ async def start_bj_pipeline(
             print(f"BJ Pipeline error for session {session_id}: {e}")
         finally:
             bj_orchestrators.pop(session_id, None)
-            gc.collect()
-            print(f"[Memory] BJ Orchestrator freed for session {session_id}")
+            print(f"BJ Pipeline completed for session {session_id}")
 
     background_tasks.add_task(run_and_store)
 
@@ -1391,11 +1480,52 @@ async def bj_websocket_endpoint(websocket: WebSocket, session_id: str):
             orchestrator.active_connections.remove(websocket)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Frontend Config Endpoint – tells the SPA which features are available
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/config")
+async def get_frontend_config():
+    """Return feature flags and version info for the frontend SPA."""
+    return {
+        "enable_maps": ENABLE_MAPS_API,
+        "enable_valuation": ENABLE_VALUATION,
+        "enable_external": ENABLE_EXTERNAL_SERVICES,
+        "version": "2.0.0-local",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Static File Serving
+# ═══════════════════════════════════════════════════════════════════════════════
+
 # Serve uploaded/processed images (panorama, etc.)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
+# Serve static frontend (CSS, JS, fonts, vendor libs)
+os.makedirs(STATIC_DIR, exist_ok=True)
+
+# SPA fallback: serve index.html for any non-API, non-file route
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    """Serve static files or fall back to index.html for SPA routing."""
+    # First, try to serve the exact file from static/
+    static_file = os.path.join(STATIC_DIR, full_path)
+    if full_path and os.path.isfile(static_file):
+        return FileResponse(static_file)
+    # Fall back to index.html (SPA entry point)
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    # If no frontend built yet, return a helpful message
+    return {"message": "Frontend not found. Place index.html in backend/static/"}
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "127.0.0.1")
+    print(f"\n  🏠 AI Validation Pipeline – Local Edition")
+    print(f"  ➜ http://{host}:{port}\n")
+    uvicorn.run(app, host=host, port=port, reload=False)
