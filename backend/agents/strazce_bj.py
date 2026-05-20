@@ -242,6 +242,12 @@ class StrazceBJAgent(BaseAgent):
             classifications = ai_result.get("classifications", [])
             summary = ai_result.get("summary", {})
 
+            # Derive categories from individual classifications (more reliable than summary)
+            all_cats_from_classifications = set()
+            for cl in classifications:
+                for cat in cl.get("categories", []):
+                    all_cats_from_classifications.add(cat.upper())
+
             exterior_count = summary.get("exterior_count", 0)
             interior_count = summary.get("interior_count", 0)
             has_cp = summary.get("has_cislo_popisne", False)
@@ -250,10 +256,12 @@ class StrazceBJAgent(BaseAgent):
             has_balkon = summary.get("has_balkon_terasa", False)
             rooms_found = summary.get("interior_rooms_found", [])
             categories = summary.get("categories_found", [])
+            # Merge with categories from individual classifications
+            categories = list(set(categories) | all_cats_from_classifications)
 
             self.log(f"Ext: {exterior_count}, Int: {interior_count}, ČP: {has_cp}, "
                      f"Vstup: {has_vstup}, Balkón: {has_balkon}")
-            self.log(f"Místnosti: {', '.join(rooms_found) if rooms_found else 'nezjištěno'}")
+            self.log(f"Místnosti: {', '.join(rooms_found) if rooms_found else 'nezjištěno'}, Kategorie: {', '.join(categories)}")
 
             # ── Evaluate completeness — SEMAFOR methodology ──
             warnings = []
@@ -276,17 +284,21 @@ class StrazceBJAgent(BaseAgent):
             # Check key rooms — BLOCKING per methodology
             rooms_lower = [r.lower() for r in rooms_found]
             rooms_text = " ".join(rooms_lower)
+            categories_text = " ".join(c.lower() for c in categories)
 
             # 2. Hlavní pokoj (obývák/ložnice)
-            if not any(k in rooms_text for k in ["pokoj", "obýv", "obyvak", "living", "ložnic"]):
+            if not any(k in rooms_text for k in ["pokoj", "obýv", "obyvak", "living", "ložnic"]) and \
+               not any(k in categories_text for k in ["pokoj", "obyvak", "loznice", "interier_pokoj"]):
                 errors.append("BLOKUJÍCÍ: Chybí fotodokumentace hlavního pokoje (obývací pokoj/ložnice).")
 
             # 3. Kuchyň
-            if not any(k in rooms_text for k in ["kuchyň", "kuchyn", "kitchen", "kuchyňsk"]):
+            if not any(k in rooms_text for k in ["kuchyň", "kuchyn", "kitchen", "kuchyňsk"]) and \
+               not any(k in categories_text for k in ["kuchyn", "kitchen"]):
                 errors.append("BLOKUJÍCÍ: Chybí fotodokumentace kuchyně.")
 
             # 4. Koupelna
-            if not any(k in rooms_text for k in ["koupeln", "bathroom", "wc"]):
+            if not any(k in rooms_text for k in ["koupeln", "bathroom", "wc"]) and \
+               not any(k in categories_text for k in ["koupelna", "bathroom", "wc"]):
                 errors.append("BLOKUJÍCÍ: Chybí fotodokumentace koupelny.")
 
             # Interior count check
