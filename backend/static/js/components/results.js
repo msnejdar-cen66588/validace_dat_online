@@ -81,14 +81,34 @@ function renderResultsDashboard(container, state) {
 
     // 1. Tagged photos (Strazce)
     if ((name === 'Strazce' || name === 'StrazceBJ') && details.classifications && details.classifications.length > 0) {
+      // Build defect map from Inspektor/InspektorBJ photo_defects
+      const inspektorKey = name === 'StrazceBJ' ? 'InspektorBJ' : 'Inspektor';
+      const inspektorDefects = (agents[inspektorKey]?.result?.details?.photo_defects || []);
+      const defectMap = {};
+      inspektorDefects.forEach(pd => { defectMap[pd.photo_id] = pd.defects || []; });
+
+      const DEFECT_LABELS = {
+        PRASKLINA: '⚠️ Prasklina', VLHKOST: '💧 Vlhkost', PLISEN: '🦠 Plíseň',
+        REKONSTRUKCE: '🔨 Rekonstrukce', POSKOZENA_OMITKA: '🧱 Poš. omítka',
+        PORUSENA_STRECHA: '🏚️ Poš. střecha', VYBYDLENOST: '⛔ Vybydlenost',
+      };
+
       extraHtml += `<div class="res-photos" style="display:flex;gap:10px;overflow-x:auto;padding:10px 0;margin-top:10px;">`;
       details.classifications.forEach(cls => {
         const photoId = cls.photo_id || cls.filename;
         const url = `/uploads/${result.session_id}/${photoId}.jpg`;
-        const cat = (cls.categories || [])[0] || 'Neznámé';
-        extraHtml += `<div style="flex-shrink:0;width:120px;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;background:#fff;">
+        const cats = (cls.categories || []);
+        const defects = defectMap[photoId] || [];
+        const hasDefect = defects.length > 0;
+        const borderColor = hasDefect ? '#ef4444' : '#e2e8f0';
+        const catLabel = cats.map(c => c.replace(/^(EXTERIER_|INTERIER_)/, '')).join(', ') || 'Neznámé';
+        const defectHtml = defects.map(d =>
+          `<span style="display:inline-block;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;font-size:10px;padding:1px 5px;margin:2px 2px 0 0;">${DEFECT_LABELS[d] || d}</span>`
+        ).join('');
+        extraHtml += `<div style="flex-shrink:0;width:130px;border-radius:8px;overflow:hidden;border:2px solid ${borderColor};background:#fff;">
           <img src="${url}" style="width:100%;height:90px;object-fit:cover;" onerror="this.style.display='none'">
-          <div style="font-size:11px;padding:6px 4px;text-align:center;color:#1e293b;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${cat.replace(/^(EXTERIER_|INTERIER_)/, '')}</div>
+          <div style="font-size:11px;padding:5px 4px;color:#1e293b;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${catLabel}">${catLabel}</div>
+          ${defectHtml ? `<div style="padding:0 4px 5px;">${defectHtml}</div>` : ''}
         </div>`;
       });
       extraHtml += `</div>`;

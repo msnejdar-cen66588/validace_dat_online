@@ -53,10 +53,17 @@ Rozhodovací kritéria (Kdy zvolit ANO):
 V důvodu VŽDY uveď hodnocení obou pohledů ve formátu:
 "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Celkový závěr]."
 
-VRAŤ POUZE VALIDNÍ JSON V TOMTO FORMÁTU:
+Navíc pro každou fotografii, kde vidíš konkrétní vadu, uveď v poli photo_defects její ID a seznam defektních tagů.
+Možné defektní tagy: PRASKLINA, VLHKOST, PLISEN, REKONSTRUKCE, POSKOZENA_OMITKA, PORUSENA_STRECHA, VYBYDLENOST
+Pokud na fotce žádná vada není, fotku do photo_defects NEZAHRŇUJ.
+
+VRATĚ POUZE VALIDNÍ JSON V TOMTO FORMÁTU:
 {
   "verdikt": "ANO" nebo "NE",
-  "duvod": "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Celkový závěr v jedné větě]."
+  "duvod": "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Celkový závěr v jedné větě].",
+  "photo_defects": [
+    {"photo_id": "id_fotky", "defects": ["PRASKLINA", "VLHKOST"]}
+  ]
 }
 """
 
@@ -111,8 +118,11 @@ class InspektorAgent(BaseAgent):
 
             verdikt = ai_result.get("verdikt", "NE")
             duvod = ai_result.get("duvod", "Neznámý důvod.")
+            photo_defects = ai_result.get("photo_defects", [])
 
             self.log(f"Verdikt: {verdikt}, Důvod: {duvod}")
+            if photo_defects:
+                self.log(f"Defekty nalezeny na {len(photo_defects)} fotkách.")
 
             warnings = []
             errors = []
@@ -128,7 +138,8 @@ class InspektorAgent(BaseAgent):
                 summary=f"Způsobilé k online ocenění: {verdikt}",
                 details={
                     "verdikt": verdikt,
-                    "duvod": duvod
+                    "duvod": duvod,
+                    "photo_defects": photo_defects,
                 },
                 warnings=warnings,
                 errors=errors,
