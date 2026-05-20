@@ -102,8 +102,8 @@ class LLMClient:
         self.model_name = model_name.lower()
         self.gemini_client = None
         
-        # Detekce ČS AI Gateway modelu
-        self._is_cs_gateway = self.model_name == "čs"
+        # Detekce ČS AI Gateway modelu – buď explicitním názvem nebo podle URL
+        self._is_cs_gateway = self.model_name == "čs" or "csint.cz" in OPENAI_BASE_URL
         
         if self._is_gemini():
             if GEMINI_API_KEY:
