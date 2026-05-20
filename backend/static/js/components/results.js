@@ -94,7 +94,7 @@ function renderResultsDashboard(container, state) {
       };
 
       extraHtml += `<div class="res-photos" style="display:flex;gap:10px;overflow-x:auto;padding:10px 0;margin-top:10px;">`;
-      details.classifications.forEach(cls => {
+      details.classifications.forEach((cls, idx) => {
         const photoId = cls.photo_id || cls.filename;
         const url = `/uploads/${result.session_id}/${photoId}.jpg`;
         const cats = (cls.categories || []);
@@ -102,13 +102,26 @@ function renderResultsDashboard(container, state) {
         const hasDefect = defects.length > 0;
         const borderColor = hasDefect ? '#ef4444' : '#e2e8f0';
         const catLabel = cats.map(c => c.replace(/^(EXTERIER_|INTERIER_)/, '')).join(', ') || 'Neznámé';
-        const defectHtml = defects.map(d =>
-          `<span style="display:inline-block;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;font-size:10px;padding:1px 5px;margin:2px 2px 0 0;">${DEFECT_LABELS[d] || d}</span>`
-        ).join('');
-        extraHtml += `<div style="flex-shrink:0;width:130px;border-radius:8px;overflow:hidden;border:2px solid ${borderColor};background:#fff;">
+        const firstCat = cats.length > 0 ? cats[0].replace(/^(EXTERIER_|INTERIER_)/, '') : 'Neznámé';
+        const moreCount = cats.length > 1 ? cats.length - 1 : 0;
+        const modalId = `photo-modal-${name}-${idx}`;
+        const allTagsHtml = [
+          ...cats.map(c => `<span style="display:inline-block;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:4px;font-size:11px;padding:2px 7px;margin:2px;">${c.replace(/^(EXTERIER_|INTERIER_)/, '')}</span>`),
+          ...defects.map(d => `<span style="display:inline-block;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;font-size:11px;padding:2px 7px;margin:2px;">${DEFECT_LABELS[d] || d}</span>`)
+        ].join('');
+        extraHtml += `
+        <div style="flex-shrink:0;width:130px;border-radius:8px;overflow:hidden;border:2px solid ${borderColor};background:#fff;cursor:pointer;" onclick="document.getElementById('${modalId}').style.display='flex'">
           <img src="${url}" style="width:100%;height:90px;object-fit:cover;" onerror="this.style.display='none'">
-          <div style="font-size:11px;padding:5px 4px;color:#1e293b;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${catLabel}">${catLabel}</div>
-          ${defectHtml ? `<div style="padding:0 4px 5px;">${defectHtml}</div>` : ''}
+          <div style="font-size:11px;padding:5px 4px;color:#1e293b;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${firstCat}${moreCount > 0 ? ` <span style="color:#6366f1;">+${moreCount}</span>` : ''}</div>
+          ${hasDefect ? `<div style="padding:0 4px 4px;"><span style="font-size:10px;color:#dc2626;">⚠️ ${defects.length} vada${defects.length > 1 ? 'y' : ''}</span></div>` : ''}
+        </div>
+        <div id="${modalId}" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;" onclick="this.style.display='none'">
+          <div style="background:#fff;border-radius:12px;max-width:600px;width:90%;padding:20px;position:relative;" onclick="event.stopPropagation()">
+            <button onclick="document.getElementById('${modalId}').style.display='none'" style="position:absolute;top:12px;right:12px;background:#f1f5f9;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:14px;">✕</button>
+            <img src="${url}" style="width:100%;max-height:350px;object-fit:contain;border-radius:8px;margin-bottom:12px;" onerror="this.style.display='none'">
+            <div style="font-size:12px;color:#64748b;margin-bottom:6px;">${cls.description || ''}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;">${allTagsHtml}</div>
+          </div>
         </div>`;
       });
       extraHtml += `</div>`;
