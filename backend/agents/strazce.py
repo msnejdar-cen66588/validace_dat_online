@@ -78,7 +78,7 @@ PRAVIDLA:
 2. Pro každou fotku vrať seznam kategorií, do kterých spadá.
 3. V popisu uveď stručně co vidíš na fotce.
 4. Pokud na exteriérové fotce vidíš číslo popisné, přidej kategorii EXTERIER_CISLO_POPISNE.
-5. Pokud na fotce vidíš vedlejší stavbu (i na pozadí exteriéru), přidej VEDLEJSI_STAVBA.
+5. Pokud na fotce vidíš vedlejší stavbu PATŘÍCÍ K OCEŇOVANÉ NEMOVITOSTI (garáž, stodola, kůlna, zahradní domek na stejném pozemku), přidej VEDLEJSI_STAVBA. NEKLASIFIKUJ jako VEDLEJSI_STAVBA sousední domy, budovy na sousedních pozemcích ani stavby na pozadí – pouze pokud jsi přesvědčen, že stavba stojí na pozemku oceňované nemovitosti.
 
 Vrať JSON:
 {
@@ -104,7 +104,7 @@ Vrať JSON:
 }
 
 DŮLEŽITÉ:
-- "vedlejsi_stavba_visible": true pokud na JAKÉKOLI fotce (i exteriérové) vidíš vedlejší stavbu na pozemku.
+- "vedlejsi_stavba_visible": true POUZE pokud jsi přesvědčen, že na JAKÉKOLI fotce vidíš vedlejší stavbu (garáž, stodola, kůlna apod.) stojící NA POZEMKU oceňované nemovitosti. Sousední domy ani budovy na pozadí se nepočítají.
 - "has_vedlejsi_stavba_photo": true pokud existuje samostatná fotka vedlejší stavby.
 - "has_vstup_domu": true pokud existuje fotka zachycující vstup do domu (vchodové dveře, zádveří).
 - "interior_rooms_found": seznam typů místností, které jsou zdokumentovány.
