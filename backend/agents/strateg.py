@@ -113,42 +113,31 @@ class StrategAgent(BaseAgent):
 
         # ── SEMAFOR decision tree — per methodology ────────────────────────────
         #
+        # � VRÁTIT KLIENTOVI (Chybí podklady) — NEJVYŠŠÍ PRIORITA:
+        #     - Strážce FAIL (neúplná/neaktuální/chybějící fotodokumentace)
+        #     - GDPR FAIL (obličeje na fotkách)
+        #
         # 🟡 SUPERVISED (Nevyhovuje online):
         #     - Inspektor FAIL (nemovitost nevhodná pro online ocenění)
         #     - ForenzníAnalytik FAIL (manipulace fotek)
         #     - GeoValidator FAIL (GPS >1000m)
         #     - KatastralniAnalytik FAIL
         #     - PorovnavacDokumentu FAIL (rozpor formulář vs realita u RD)
-        #     - 0 FAIL, ale 1+ WARN
-        #
-        # 🔴 VRÁTIT KLIENTOVI (Chybí podklady):
-        #     - Pouze pokud by šlo online, ale chybí dokumentace!
-        #     - Strážce FAIL (neúplná/neaktuální fotodokumentace)
-        #     - GDPR FAIL (obličeje na fotkách)
+        #     - 0 FAIL, ale 1+ WARN (mimo Strazce)
         #
         # 🟢 ONLINE: 0 FAIL, 0 WARN
         #
 
-        # Agenti, jejichž selhání znamená, že nemovitost prostě NEMŮŽE jít online (-> SUPERVISED)
-        agents_blocking_online = {"Inspektor", "ForenzniAnalytik", "GeoValidator", "Historik", "KatastralniAnalytik", "PorovnavacDokumentu"}
-        
-        # Agenti, jejichž selhání znamená chybnou/chybějící dokumentaci (-> VRÁTIT KLIENTOVI)
+        # Agenti, jejichž selhání znamená chybnou/chybějící dokumentaci (-> VRÁTIT KLIENTOVI) — PRIORITA
         agents_missing_docs = {"Strazce", "GDPRValidator"}
 
-        is_ineligible_for_online = any(a in failing_agents for a in agents_blocking_online)
+        # Agenti, jejichž selhání znamená, že nemovitost NEMŮŽE jít online (-> SUPERVISED)
+        agents_blocking_online = {"Inspektor", "ForenzniAnalytik", "GeoValidator", "Historik", "KatastralniAnalytik", "PorovnavacDokumentu"}
+
         is_missing_docs = any(a in failing_agents for a in agents_missing_docs)
+        is_ineligible_for_online = any(a in failing_agents for a in agents_blocking_online)
 
-        if is_ineligible_for_online:
-            semaphore = "SUPERVISED"
-            semaphore_color = "orange"
-            fail_reasons = []
-            for name in failing_agents:
-                if name in agents_blocking_online:
-                    summary = agent_summaries.get(name, {}).get("summary", "")
-                    fail_reasons.append(f"{name}: {summary}")
-            semaphore_reason = f"Nemovitost vyžaduje dohled pracovníka (nesplňuje kritéria pro online): {' | '.join(fail_reasons)}"
-
-        elif is_missing_docs:
+        if is_missing_docs:
             semaphore = "VRÁTIT KLIENTOVI"
             semaphore_color = "red"
             fail_reasons = []
@@ -160,6 +149,16 @@ class StrategAgent(BaseAgent):
                     elif name == "GDPRValidator":
                         fail_reasons.append(f"GDPR problém (osoby na fotkách): {summary}")
             semaphore_reason = " | ".join(fail_reasons)
+
+        elif is_ineligible_for_online:
+            semaphore = "SUPERVISED"
+            semaphore_color = "orange"
+            fail_reasons = []
+            for name in failing_agents:
+                if name in agents_blocking_online:
+                    summary = agent_summaries.get(name, {}).get("summary", "")
+                    fail_reasons.append(f"{name}: {summary}")
+            semaphore_reason = f"Nemovitost vyžaduje dohled pracovníka (nesplňuje kritéria pro online): {' | '.join(fail_reasons)}"
 
         elif total_warns_for_supervised >= 1:
             semaphore = "SUPERVISED"

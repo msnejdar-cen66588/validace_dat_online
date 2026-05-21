@@ -207,13 +207,16 @@ class StrategBJAgent(BaseAgent):
         agents_blocking_online = {"InspektorBJ", "ForenzniAnalytik", "GeoValidator", "Historik", "KatastralniAnalytik"}
         agents_missing_docs = {"StrazceBJ", "GDPRValidator", "PorovnavacDokumentuBJ"}
 
-        is_ineligible_for_online = any(a in failing_agents for a in agents_blocking_online)
+        # VRÁTIT KLIENTOVI má prioritu – nedostatek fotodokumentace vždy = červená
         is_missing_docs = any(a in failing_agents for a in agents_missing_docs)
+        is_ineligible_for_online = any(a in failing_agents for a in agents_blocking_online)
 
-        if is_ineligible_for_online:
+        if is_missing_docs:
+            semaphore, color, status = "RETURN", "red", AgentStatus.FAIL
+            reasoning = "Rule-based: Chybí/nevyhovuje fotodokumentace nebo dokument plochy."
+        elif is_ineligible_for_online:
             semaphore, color, status = "SUPERVISED", "yellow", AgentStatus.WARN
             reasoning = "Rule-based: Nemovitost vyžaduje dohled (nelze plně online)."
-        elif is_missing_docs:
             semaphore, color, status = "RETURN", "red", AgentStatus.FAIL
             reasoning = "Rule-based: Chybí/nevyhovuje fotodokumentace nebo dokument plochy."
         elif warns_for_supervised >= 1:
