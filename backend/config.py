@@ -113,9 +113,9 @@ MIN_BRIGHTNESS = 40               # Průměrný jas (0–255) — pod tímto = p
 MAX_BRIGHTNESS = 245              # Průměrný jas — nad tímto = přesvětlené
 
 # ── GDPR detekce osob/obličejů ────────────────────────────────────────────────
-# Metodika: >80% confidence = FAIL, 60–80% = WARN
-GDPR_FACE_FAIL_CONFIDENCE = 0.8   # obličej s jistotou >80 % → FAIL
-GDPR_FACE_WARN_CONFIDENCE = 0.6   # nejistá detekce 60–80 % → WARN
+# Metodika: >90% confidence = FAIL, 75–90% = WARN
+GDPR_FACE_FAIL_CONFIDENCE = 0.9   # obličej s jistotou >90 % → FAIL
+GDPR_FACE_WARN_CONFIDENCE = 0.75  # nejistá detekce 75–90 % → WARN
 
 # ── Strážce RD (rodinný dům) ─────────────────────────────────────────────────
 MIN_TOTAL_PHOTOS = 9       # Minimální počet fotek pro RD
