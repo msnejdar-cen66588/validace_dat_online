@@ -19,6 +19,7 @@ function renderResultsDashboard(container, state) {
   const { result, onReset, onEdit, isBatchMode, onBackToBatch } = state;
   const sem = result.semaphore || 'UNKNOWN';
   const semColor = result.semaphore_color || 'gray';
+  const semReason = result.semaphore_reason || '';
   const agents = result.agents || {};
   const isBJ = result.pipeline_type === 'bj' || !!agents['StrategBJ'];
   const strategist = agents[isBJ ? 'StrategBJ' : 'Strateg'];
@@ -41,9 +42,20 @@ function renderResultsDashboard(container, state) {
 
   let html = `<section class="res-section"><div class="res-container">`;
 
-  // Verdict header
-  html += `<div class="res-verdict res-verdict-${semColor}">
-    <div class="res-verdict-left"><span class="res-verdict-icon">${semIcon}</span><div><h2 class="res-verdict-title">${sem}</h2><p class="res-verdict-sub">${semLabel}</p></div></div>
+  // Verdict header – clickable to reveal reason
+  const reasonHtml = semReason
+    ? `<div class="res-verdict-reason" id="semReasonBox" style="display:none;margin-top:10px;padding:10px 14px;background:rgba(0,0,0,0.18);border-radius:8px;font-size:0.92rem;line-height:1.5;">${semReason}</div>`
+    : '';
+  const chevronHtml = semReason
+    ? `<span class="res-verdict-chevron" style="margin-left:auto;font-size:1.3rem;opacity:0.7;transition:transform .2s;cursor:pointer;" title="Zobrazit důvod">&#8964;</span>`
+    : '';
+  html += `<div class="res-verdict res-verdict-${semColor}" ${semReason ? 'style="cursor:pointer;"' : ''} onclick="toggleSemReason(this)">
+    <div class="res-verdict-left" style="flex:1;">
+      <span class="res-verdict-icon">${semIcon}</span>
+      <div style="flex:1;"><h2 class="res-verdict-title">${sem}</h2><p class="res-verdict-sub">${semLabel}</p></div>
+      ${chevronHtml}
+    </div>
+    ${reasonHtml}
   </div>`;
 
   // Meta strip + PDF download
@@ -379,4 +391,13 @@ function renderResultsDashboard(container, state) {
   if (editBtn) editBtn.onclick = onEdit;
   if (resetBtn) resetBtn.onclick = onReset;
   if (batchBackBtn) batchBackBtn.onclick = onBackToBatch;
+}
+
+function toggleSemReason(el) {
+  const box = el.querySelector('#semReasonBox');
+  const chevron = el.querySelector('.res-verdict-chevron');
+  if (!box) return;
+  const isOpen = box.style.display !== 'none';
+  box.style.display = isOpen ? 'none' : 'block';
+  if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
 }

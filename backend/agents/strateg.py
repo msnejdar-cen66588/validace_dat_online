@@ -61,6 +61,8 @@ class StrategAgent(BaseAgent):
 
         # Count warnings and fails
         total_warns = 0
+        # Warnings that actually trigger SUPERVISED (Strazce WARN = photo age 90-180 days → only informational)
+        total_warns_for_supervised = 0
         has_fail = False
         failing_agents = []
         all_warnings = []
@@ -80,6 +82,9 @@ class StrategAgent(BaseAgent):
                 "category": result.category,
             }
             total_warns += len(result.warnings)
+            # Strazce WARNs (photo age 90-180 days) are informational only – do NOT trigger SUPERVISED
+            if name not in ("Strazce", "StrazceBJ"):
+                total_warns_for_supervised += len(result.warnings)
             all_warnings.extend(result.warnings)
             all_errors.extend(result.errors)
             if result.status == AgentStatus.FAIL:
@@ -156,12 +161,12 @@ class StrategAgent(BaseAgent):
                         fail_reasons.append(f"GDPR problém (osoby na fotkách): {summary}")
             semaphore_reason = " | ".join(fail_reasons)
 
-        elif total_warns >= 1:
+        elif total_warns_for_supervised >= 1:
             semaphore = "SUPERVISED"
             semaphore_color = "orange"
             semaphore_reason = (
                 f"Online ocenění je možné, ale výsledky vyžadují manuální přezkoumání "
-                f"supervizorem ({total_warns} varování)."
+                f"supervizorem ({total_warns_for_supervised} varování)."
             )
         else:
             semaphore = "ONLINE"

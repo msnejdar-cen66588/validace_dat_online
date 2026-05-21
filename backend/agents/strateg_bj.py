@@ -197,8 +197,9 @@ class StrategBJAgent(BaseAgent):
         """Simple rule-based fallback when AI is unavailable."""
         fails = sum(1 for a in agent_summaries.values()
                     if (a.get("status") if isinstance(a, dict) else "") == "fail")
-        warns = sum(1 for a in agent_summaries.values()
-                    if (a.get("status") if isinstance(a, dict) else "") == "warn")
+        warns_for_supervised = sum(1 for name, a in agent_summaries.items()
+                    if (a.get("status") if isinstance(a, dict) else "") == "warn"
+                    and name not in ("StrazceBJ", "Strazce"))
 
         failing_agents = [name for name, a in agent_summaries.items()
                           if (a.get("status") if isinstance(a, dict) else "") == "fail"]
@@ -215,9 +216,9 @@ class StrategBJAgent(BaseAgent):
         elif is_missing_docs:
             semaphore, color, status = "RETURN", "red", AgentStatus.FAIL
             reasoning = "Rule-based: Chybí/nevyhovuje fotodokumentace nebo dokument plochy."
-        elif warns >= 1:
+        elif warns_for_supervised >= 1:
             semaphore, color, status = "SUPERVISED", "yellow", AgentStatus.WARN
-            reasoning = f"Rule-based: 0 fails, {warns} warnings."
+            reasoning = f"Rule-based: 0 fails, {warns_for_supervised} warnings."
         else:
             semaphore, color, status = "ONLINE", "green", AgentStatus.SUCCESS
             reasoning = "Rule-based: Vše v pořádku."

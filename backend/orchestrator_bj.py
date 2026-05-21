@@ -248,6 +248,7 @@ class BJPipelineOrchestrator:
             "total_time": total_time,
             "semaphore": strategist_result.details.get("semaphore", "UNKNOWN"),
             "semaphore_color": strategist_result.details.get("semaphore_color", "gray"),
+            "semaphore_reason": strategist_result.details.get("semaphore_reason", strategist_result.details.get("reasoning", "")),
             "final_category": strategist_result.category,
             "agents": self.results,
             "property_data": context.get("property_data"),
