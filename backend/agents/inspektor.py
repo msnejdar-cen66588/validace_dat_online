@@ -60,10 +60,16 @@ Navíc pro každou fotografii, kde vidíš konkrétní vadu, uveď v poli photo_
 Možné defektní tagy: PRASKLINA, VLHKOST, PLISEN, REKONSTRUKCE, POSKOZENA_OMITKA, PORUSENA_STRECHA, VYBYDLENOST
 Pokud na fotce žádná vada není, fotku do photo_defects NEZAHRŇUJ.
 
-VRATĚ POUZE VALIDNÍ JSON V TOMTO FORMÁTU:
+KOMERČNÍ VYUŽITÍ:
+Pokud na fotografiích vidíš jakékoliv známky komerčního využití části nemovitosti (prodejna, salon, kadeřnictví, kavárna, hospoda, kancelář, ordinace, ubytovací zařízení apod.), nastav pole "komerci_prostor" na true.
+Drobná domácí dílna nebo pracovna (home office) nejsou komerční prostor.
+
+VRAŤTE POUZE VALIDNÍ JSON V TOMTO FORMÁTU:
 {
   "verdikt": "ANO" nebo "NE",
   "duvod": "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Celkový závěr v jedné větě].",
+  "komerci_prostor": false,
+  "komerci_prostor_popis": "Popis, pokud komerci_prostor=true, jinak prázdný řetězec.",
   "photo_defects": [
     {"photo_id": "id_fotky", "defects": ["PRASKLINA", "VLHKOST"]}
   ]
@@ -122,8 +128,12 @@ class InspektorAgent(BaseAgent):
             verdikt = ai_result.get("verdikt", "NE")
             duvod = ai_result.get("duvod", "Neznámý důvod.")
             photo_defects = ai_result.get("photo_defects", [])
+            komerci_prostor = ai_result.get("komerci_prostor", False)
+            komerci_popis = ai_result.get("komerci_prostor_popis", "")
 
             self.log(f"Verdikt: {verdikt}, Důvod: {duvod}")
+            if komerci_prostor:
+                self.log(f"Komerční prostor detekován: {komerci_popis}", "warn")
             if photo_defects:
                 self.log(f"Defekty nalezeny na {len(photo_defects)} fotkách.")
 
@@ -136,12 +146,21 @@ class InspektorAgent(BaseAgent):
             else:
                 status = AgentStatus.SUCCESS
 
+            # Commercial space → always add warning (triggers SUPERVISED regardless of verdict)
+            if komerci_prostor:
+                warnings.append(
+                    f"Detekován komerční prostor v RD – nemovitost vyžaduje dohled pracovníka. "
+                    f"{komerci_popis}".strip()
+                )
+
             return AgentResult(
                 status=status,
                 summary=f"Způsobilé k online ocenění: {verdikt}",
                 details={
                     "verdikt": verdikt,
                     "duvod": duvod,
+                    "komerci_prostor": komerci_prostor,
+                    "komerci_prostor_popis": komerci_popis,
                     "photo_defects": photo_defects,
                 },
                 warnings=warnings,
