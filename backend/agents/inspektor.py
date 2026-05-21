@@ -48,8 +48,11 @@ Rozhodovací kritéria (Kdy zvolit NE):
 Rozhodovací kritéria (Kdy zvolit ANO):
 - Dům je starý, esteticky zastaralý (např. 80. léta), ale vše je kompletní a funkční.
 - Dům je čistý, suchý a bez prasklin – A TO PLATÍ PRO EXTERIÉR I INTERIÉR SOUČASNĚ.
-- Zahrada je neudržovaná, ale dům jako takový je stavebně v pořádku.
+- Zahrada je neudržovaná, ale dům jako takový je stavebně v pořádku.- Vedlejší stavba (garáž, kůlna, stodola) nebo sklep jsou v horším technickém stavu – to SAMO O SOBĚ není důvod k zámrku. Vedlejší stavby a sklepy se hodnotit odlišně od hlavní obývané části domu.
 
+VÜJIMKY – vedlejší stavba nebo sklep POUZE v těchto případech vynucují NE:
+- Sklep: viditelná vlhkost, mapy od vody nebo pleseň v HLAVNÍM obývaném prostoru (ne pouhotě v technickém sklepu).
+- Vedlejší stavba: konstrukce skutečně ohrožuje zdraví nebo bezpečnost (např. padající střecha přímo nad pohybovým prostorem, zhroucené zdi).
 V důvodu VŽDY uveď hodnocení obou pohledů ve formátu:
 "Exteriér: [hodnocení]. Interiér: [hodnocení]. [Celkový závěr]."
 

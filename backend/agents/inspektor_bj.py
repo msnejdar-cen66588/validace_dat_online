@@ -53,8 +53,11 @@ Rozhodovací kritéria (Kdy zvolit NE):
 Rozhodovací kritéria (Kdy zvolit ANO):
 - Byt je starší ale kompletní a funkční (i s retro vybavením)
 - Budova je starší ale strukturálně v pořádku
-- Běžné opotřebení odpovídající stáří
+- Běžné opotřebení odpovídající stáří- Sklepní prostory nebo vedlejší uložiště v horším stavu – to SAMO O SOBĚ není důvod k zámrku.
 
+VÜJIMKY – sklep nebo vedlejší prostory POUZE v těchto případech vynucují NE:
+- Sklep: viditelná vlhkost nebo plešeň která se šíří do obývané části bytu.
+- Vedlejší prostory: konstrukce skutečně ohrožuje zdraví nebo bezpečnost uživatelů.
 V důvodu VŽDY uveď hodnocení obou pohledů ve formátu:
 "Budova: [hodnocení]. Byt: [hodnocení]. [Celkový závěr]."
 
