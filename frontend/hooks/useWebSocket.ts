@@ -14,6 +14,9 @@ export interface WSMessage {
     result?: any;
     agents?: string[];
     step?: string;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
 }
 
 const MAX_RECONNECT_ATTEMPTS = 8;
@@ -35,6 +38,8 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
     const [valuationSteps, setValuationSteps] = useState<Record<string, string>>({});
     const [valuationResult, setValuationResult] = useState<any>(null);
     const [isValuating, setIsValuating] = useState(false);
+    // Token usage
+    const [tokenUsage, setTokenUsage] = useState<{ prompt: number; completion: number; total: number }>({ prompt: 0, completion: 0, total: 0 });
 
     // Fallback: HTTP polling — ONLY used after WebSocket max retries exhausted
     const startPolling = useCallback(() => {
@@ -121,6 +126,7 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
                         setAgentStatuses({});
                         setAgentLogs({});
                         setPipelineResult(null);
+                        setTokenUsage({ prompt: 0, completion: 0, total: 0 });
                         msg.agents?.forEach(name => {
                             setAgentStatuses(prev => ({ ...prev, [name]: 'idle' }));
                         });
@@ -169,6 +175,14 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
                         setIsValuating(false);
                         setValuationResult(msg.result);
                         break;
+
+                    case 'token_update':
+                        setTokenUsage({
+                            prompt: msg.prompt_tokens ?? 0,
+                            completion: msg.completion_tokens ?? 0,
+                            total: msg.total_tokens ?? 0,
+                        });
+                        break;
                 }
             } catch (e) {
                 console.error('WS parse error:', e);
@@ -203,5 +217,6 @@ export function useWebSocket(sessionId: string | null, pipelineType: 'rd' | 'bj'
         valuationSteps,
         valuationResult,
         isValuating,
+        tokenUsage,
     };
 }

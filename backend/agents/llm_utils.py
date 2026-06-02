@@ -101,7 +101,10 @@ class LLMClient:
     def __init__(self, model_name: str = "gemini"):
         self.model_name = model_name.lower()
         self.gemini_client = None
-        
+        # Token usage tracking (cumulative per instance)
+        self.prompt_tokens: int = 0
+        self.completion_tokens: int = 0
+
         # Detekce ČS AI Gateway modelu – buď explicitním názvem nebo podle URL
         self._is_cs_gateway = self.model_name == "čs" or "csint.cz" in OPENAI_BASE_URL
         
@@ -198,6 +201,14 @@ class LLMClient:
                         temperature=temperature,
                     ),
                 )
+                # Capture Gemini token usage
+                try:
+                    um = response.usage_metadata
+                    if um:
+                        self.prompt_tokens += getattr(um, 'prompt_token_count', 0) or 0
+                        self.completion_tokens += getattr(um, 'candidates_token_count', 0) or 0
+                except Exception:
+                    pass
                 return response.text
 
             except Exception as e:
@@ -344,6 +355,17 @@ class LLMClient:
                     
                     response.raise_for_status()
                     result = response.json()
+                    # Capture OpenAI/ČS gateway token usage
+                    try:
+                        usage = result.get("usage") or {}
+                        self.prompt_tokens += int(
+                            usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                        )
+                        self.completion_tokens += int(
+                            usage.get("completion_tokens") or usage.get("output_tokens") or 0
+                        )
+                    except Exception:
+                        pass
                     return result["choices"][0]["message"]["content"]
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 429:

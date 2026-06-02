@@ -63,6 +63,8 @@ class BJPipelineOrchestrator:
         self.active_connections: list[WebSocket] = []
         self.is_running = False
         self.results: dict[str, dict] = {}
+        self.total_prompt_tokens: int = 0
+        self.total_completion_tokens: int = 0
 
     async def broadcast(self, message: dict):
         """Broadcast a message to all WebSocket connections."""
@@ -132,6 +134,20 @@ class BJPipelineOrchestrator:
         # Flush logs
         for log_entry in agent.logs:
             await self._notify_log(agent_name, log_entry.message, log_entry.level)
+
+        # Accumulate token usage and broadcast update
+        if hasattr(agent, 'client') and agent.client is not None:
+            self.total_prompt_tokens += agent.client.prompt_tokens
+            self.total_completion_tokens += agent.client.completion_tokens
+            await self.broadcast({
+                "type": "token_update",
+                "pipeline_id": self.pipeline_id,
+                "agent": agent_name,
+                "prompt_tokens": self.total_prompt_tokens,
+                "completion_tokens": self.total_completion_tokens,
+                "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
+                "timestamp": time.time(),
+            })
 
         elapsed = agent.get_elapsed_time()
         self.results[agent_name] = agent.to_dict()
@@ -230,6 +246,20 @@ class BJPipelineOrchestrator:
 
         elapsed = strategist.get_elapsed_time()
         self.results["StrategBJ"] = strategist.to_dict()
+
+        # Accumulate StrategBJ token usage
+        if hasattr(strategist, 'client') and strategist.client is not None:
+            self.total_prompt_tokens += strategist.client.prompt_tokens
+            self.total_completion_tokens += strategist.client.completion_tokens
+            await self.broadcast({
+                "type": "token_update",
+                "pipeline_id": self.pipeline_id,
+                "agent": "StrategBJ",
+                "prompt_tokens": self.total_prompt_tokens,
+                "completion_tokens": self.total_completion_tokens,
+                "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
+                "timestamp": time.time(),
+            })
 
         await self._notify_status(
             "StrategBJ",

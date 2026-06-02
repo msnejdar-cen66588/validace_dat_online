@@ -8,6 +8,7 @@ import ProcessingLoader from '@/components/ProcessingLoader';
 import AppInfo from '@/components/AppInfo';
 import BatchDashboard from '@/components/BatchDashboard';
 import ContractAnalyzer from '@/components/ContractAnalyzer';
+import TokenCounter from '@/components/TokenCounter';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useBatchWebSocket } from '@/hooks/useBatchWebSocket';
 
@@ -433,14 +434,11 @@ export default function Home() {
       ],
     },
     {
-      id: 'openai',
-      name: 'OpenAI',
-      icon: '🟢',
+      id: 'cs',
+      name: 'Česká spořitelna',
+      icon: '🏦',
       models: [
-        { id: 'gpt-5.4', name: 'GPT-5.4', desc: 'Nejnovější vlajkový model OpenAI' },
-        { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', desc: 'Rychlý a cenově efektivní' },
-        { id: 'gpt-4.1', name: 'GPT-4.1', desc: 'Vyvážený výkon a cena' },
-        { id: 'o4-mini', name: 'o4-mini', desc: 'Reasoning model pro analytiku' },
+        { id: 'čs', name: 'ČS AI Gateway', desc: 'Interní GPT-4o gateway České spořitelny' },
       ],
     },
   ];
@@ -553,6 +551,8 @@ export default function Home() {
       </header>
 
       {showAppInfo && <AppInfo onClose={() => setShowAppInfo(false)} />}
+
+      <TokenCounter tokenUsage={ws.tokenUsage} model={selectedModel} />
 
       <div className={styles.container}>
         {/* Upload Step */}
